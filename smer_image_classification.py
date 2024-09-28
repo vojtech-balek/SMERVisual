@@ -20,12 +20,14 @@ class ImageClassifier:
 
     def image_description(self, file: Union[PathLike, str], prompt: str, model='gpt-4o-mini'):
         """
-        Call
+        Generate image description with the use of OpenAI API.
         :param file: path to a jpeg file
-        :type file: PathLike or string
-        :param prompt:
-        :param model:
-        :return:
+        :type file: PathLike or str
+        :param prompt: Text specification of the instruction for the LLM.
+        :type prompt: str
+        :param model: OpenAI model to use
+        :type model: str
+        :return: Text description of the image if no exception occurs, None otherwise
         """
         client = OpenAI(api_key=self.open_ai_key)
 
