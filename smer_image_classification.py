@@ -60,6 +60,11 @@ class ImageClassifier:
     # Function to transform sentence to embeddings and compute average embeddings
     @staticmethod
     def get_all_embeddings(sentence):
+        """
+        Generate embeddings for the image's word description.
+        :param sentence: Word description of an image.
+        :return: Embedding of length 1536
+        """
         words = sentence.split()
         embeddings = []
 
