@@ -25,7 +25,7 @@ class ImageClassifier:
         """
         client = OpenAI(api_key=self.open_ai_key)
 
-        encoded_image = self.encode_image_to_base64(file)
+        encoded_image = self.encode_image(file)
         try:
             # Create the GPT-4o API request
             response = client.chat.completions.create(
