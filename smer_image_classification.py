@@ -12,13 +12,7 @@ class ImageClassifier:
     def __init__(self, openai_key):
         self.open_ai_key = openai_key
 
-    @staticmethod
-    def encode_image(image_path=os.environ['OPEN_AI_API_KEY']):
-        with open(image_path, 'rb') as image_file:
-            image_data = image_file.read()
-        return base64.b64encode(image_data).decode('utf-8')
-
-    def image_description(self, file: Union[PathLike, str], prompt: str, model='gpt-4o-mini'):
+    def image_description(self, file: Union[PathLike, str], prompt: str, model='gpt-4o-mini') -> Union[str, None]:
         """
         Generate image description with the use of OpenAI API.
         :param file: path to a jpeg file
@@ -59,10 +53,11 @@ class ImageClassifier:
 
     # Function to transform sentence to embeddings and compute average embeddings
     @staticmethod
-    def get_all_embeddings(sentence):
+    def get_all_embeddings(sentence: str) -> np.array:
         """
         Generate embeddings for the image's word description.
         :param sentence: Word description of an image.
+        :type sentence: str
         :return: Embedding of length 1536
         """
         words = sentence.split()
@@ -84,3 +79,15 @@ class ImageClassifier:
             return embeddings
         else:
             return np.zeros(1536)  # ADA embedding size is 1536
+
+    @staticmethod
+    def encode_image(image_path: str):
+        """
+        Encode image to a base64 representation.
+        :param image_path: Path to an aimage.
+        :type image_path: str
+        :return: base64 representation of the image
+        """
+        with open(image_path, 'rb') as image_file:
+            image_data = image_file.read()
+        return base64.b64encode(image_data).decode('utf-8')
