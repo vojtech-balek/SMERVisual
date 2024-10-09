@@ -3,7 +3,7 @@ from openai import OpenAI, Embedding
 import base64
 from os import PathLike
 from typing import Union
-
+from sklearn.linear_model import LogisticRegression
 import numpy as np
 import torch
 from openai import OpenAI, Embedding
@@ -105,7 +105,6 @@ class ImageClassifier:
             print(f'Error: {e}')
             return None
 
-    # Function to transform sentence to embeddings and compute average embeddings
     @staticmethod
     def get_all_embeddings(sentence: str) -> np.array:
         """
@@ -134,8 +133,118 @@ class ImageClassifier:
         else:
             return np.zeros(1536)  # ADA embedding size is 1536
 
-    def classify_with_logreg(self):
-        pass
+    def classify_with_logreg(self, df):
+
+        # Extract features and labels
+        X = np.stack(df['aggregated_embedding'].values)
+        #y = df['Class'].apply(lambda x: 1 if x == 'vase' else 0)  # Binary encoding: vase=1, hotpot=0
+        y = df['Class']
+
+
+        train_size = 2000
+        X_train = X[:train_size]
+        X_test = X[train_size+1:]
+        X_test_embeddings = df['Embedding'][train_size+1:].reset_index(drop=True)
+
+        y_train = y[:train_size]
+        y_test = y[train_size+1:]
+        # Split the data
+        #X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        # Train a Random Forest classifier
+        model = LogisticRegression()
+        model.fit(X_train, y_train)
+
+        accuracy = model.score(X_test, y_test)
+        print("Accuracy:", accuracy)
+        df['Feature_Importance'] = None  # Initialize column
+        df['Sorted_Words_by_Importance'] = None
+
+        for idx in range(len(df)):
+            # Get the original description
+            description = df.Description[idx]
+
+            # Get the original prediction probability
+            original_texts = [description]
+            original_embeddings = []
+            words = description.split()
+            word_indices = [description.split().index(word) for word in words if word in description.split()]
+            print(word_indices)
+            word_embeddings = [df['Embedding'].iloc[idx][i] for i in word_indices]
+
+            if word_embeddings:
+                # Aggregate the embeddings (e.g., by averaging)
+                original_aggregated_embedding = np.mean(word_embeddings, axis=0)
+            else:
+                # Handle the case where no words are left (e.g., return a zero vector)
+                original_aggregated_embedding = np.zeros_like(df['Embedding'].iloc[idx][0])
+
+            original_embeddings.append(original_aggregated_embedding)
+            original_embeddings = np.array(original_embeddings)
+
+            # Ensure embeddings array is 2D (samples, features)
+            if original_embeddings.ndim != 2 or original_embeddings.shape[1] != 1536:
+                raise ValueError(f"Expected 2D array with 1536 features, got shape {original_embeddings.shape}")
+
+            # Predict probabilities using the trained Logistic Regression model
+            original_prob = model.predict_proba(original_embeddings)[0]
+
+            # Prepare for storing feature importance scores
+            importance_scores = {}
+
+            # Remove each word one by one and calculate feature importance
+            for word in words:
+                print(words)
+                # Remove the word from the description
+                perturbed_text = ' '.join(w for w in words if w != word)
+                print(perturbed_text)
+
+                # Calculate the embeddings for the perturbed text
+                perturbed_words = perturbed_text.split()
+                print(perturbed_words)
+                perturbed_word_indices = [description.split().index(w) for w in perturbed_words if w in description.split()]
+                print(perturbed_word_indices)
+                perturbed_word_embeddings = [df['Embedding'].iloc[idx][i] for i in perturbed_word_indices]
+                print(len(perturbed_word_embeddings))
+
+                if perturbed_word_embeddings:
+                    # Aggregate the embeddings (e.g., by averaging)
+                    perturbed_aggregated_embedding = np.mean(perturbed_word_embeddings, axis=0)
+                else:
+                    # Handle the case where no words are left (e.g., return a zero vector)
+                    perturbed_aggregated_embedding = np.zeros_like(df['Embedding'].iloc[idx][0])
+
+                perturbed_embeddings = np.array([perturbed_aggregated_embedding])
+
+                # Ensure embeddings array is 2D (samples, features)
+                if perturbed_embeddings.ndim != 2 or perturbed_embeddings.shape[1] != 1536:
+                    raise ValueError(f"Expected 2D array with 1536 features, got shape {perturbed_embeddings.shape}")
+
+                # Predict probabilities using the trained Logistic Regression model
+                perturbed_prob = model.predict_proba(perturbed_embeddings)[0]
+
+                # Calculate the drop in probability
+                drop = original_prob - perturbed_prob
+
+                # Adjust based on class
+                target_class = df.Class[idx]
+                if target_class == 'hotpot':
+                    importance_scores[word] = drop[0]  # For hotpot, more negative means more important
+                elif target_class == 'vase':
+                    importance_scores[word] = -drop[0]  # For vase, more positive means more important
+
+            # Sort words by importance score
+            sorted_importance = sorted(importance_scores.items(), key=lambda x: x[1], reverse=True)
+
+            # Convert sorted importance_scores to a comma-separated string
+            importance_str = ','.join(f"{word}:{score:.4f}" for word, score in sorted_importance)
+            df.at[idx, 'Feature_Importance'] = importance_str
+
+            # Create a list of words sorted by their importance
+            sorted_words_list = [word for word, score in sorted_importance]
+            sorted_words_str = ','.join(sorted_words_list)
+            df.at[idx, 'Sorted_Words_by_Importance'] = sorted_words_str
+
     @staticmethod
     def encode_image(image_path: str):
         """
