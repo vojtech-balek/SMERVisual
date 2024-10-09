@@ -1,22 +1,14 @@
-import os
 import base64
 from openai import OpenAI, Embedding
-import pandas as pd
-import numpy as np
-from pathlib import Path
-from typing import Union
+import base64
 from os import PathLike
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from typing import Union
+
+import numpy as np
 import torch
-import ast
-import spacy
-from sklearn.linear_model import LogisticRegression
-from lime.lime_text import LimeTextExplainer
-from sklearn.pipeline import make_pipeline
-import matplotlib.pyplot  as plt
-import seaborn as sns
-import re
-from tqdm import tqdm
+from openai import OpenAI, Embedding
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
 
 class ImageClassifier:
     def __init__(self, use_openai=True, openai_model = None, openai_key=None, local_model_path=None):
