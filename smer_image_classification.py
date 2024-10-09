@@ -152,3 +152,8 @@ class ImageClassifier:
     def aggregate_embeddings(embedding_list):
         """Flatten the list of lists and take the mean along the axis"""
         return np.mean(embedding_list, axis=0)
+
+class ImageLabeler:
+    """Label data using Large Language Model"""
+    def __init__(self):
+        pass
