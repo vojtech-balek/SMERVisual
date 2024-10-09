@@ -19,18 +19,21 @@ import re
 from tqdm import tqdm
 
 class ImageClassifier:
-    def __init__(self, use_openai=True, openai_key=None, local_model_path=None):
+    def __init__(self, use_openai=True, openai_model = None, openai_key=None, local_model_path=None):
         """
         Initialize the ImageClassifier with OpenAI API or a local model.
         :param use_openai: Boolean flag to determine whether to use OpenAI API or a local model.
         :param openai_key: API key for OpenAI (required if use_openai is True).
         :param local_model_path: Custom local model object to be used (required if use_openai is False).
         """
-        self.use_openai = use_openai
-        if self.use_openai:
+        self.model_host = "openai" if use_openai else "local"
+        if self.model_host == "openai":
             if not openai_key:
                 raise ValueError("OpenAI key must be provided when using OpenAI API.")
+            if not openai_model:
+                raise ValueError("OpenAI model must be provided when using OpenAI API.")
             self.open_ai_key = openai_key
+            self.open_ai_model = openai_model
 
         else:
             if not local_model_path:
@@ -41,7 +44,9 @@ class ImageClassifier:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.model.to(self.device)
 
-    def _openai_image_description(self, file: Union[PathLike, str], prompt: str, model='gpt-4o-mini') -> Union[str, None]:
+    def __call__(self, file, prompt = 'Describe this image in 7 words.'):
+        getattr(self, f"_{self.model_host}_image_description")(file, prompt)
+    def _openai_image_description(self, file: Union[PathLike, str], prompt: str) -> Union[str, None]:
         """
         Generate image description with the use of OpenAI API.
         :param file: path to a jpeg file
@@ -58,7 +63,7 @@ class ImageClassifier:
         try:
             # Create the GPT-4o API request
             response = client.chat.completions.create(
-                model=model,
+                model=self.open_ai_model,
                 messages=[
                     {
                         "role": "user",
