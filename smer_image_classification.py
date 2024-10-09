@@ -8,7 +8,15 @@ from typing import Union
 from os import PathLike
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
-
+import ast
+import spacy
+from sklearn.linear_model import LogisticRegression
+from lime.lime_text import LimeTextExplainer
+from sklearn.pipeline import make_pipeline
+import matplotlib.pyplot  as plt
+import seaborn as sns
+import re
+from tqdm import tqdm
 
 class ImageClassifier:
     def __init__(self, use_openai=True, openai_key=None, local_model_path=None):
@@ -129,6 +137,8 @@ class ImageClassifier:
         else:
             return np.zeros(1536)  # ADA embedding size is 1536
 
+    def classify_with_logreg(self):
+        pass
     @staticmethod
     def encode_image(image_path: str):
         """
@@ -140,3 +150,8 @@ class ImageClassifier:
         with open(image_path, 'rb') as image_file:
             image_data = image_file.read()
         return base64.b64encode(image_data).decode('utf-8')
+
+    @staticmethod
+    def aggregate_embeddings(embedding_list):
+        """Flatten the list of lists and take the mean along the axis"""
+        return np.mean(embedding_list, axis=0)
