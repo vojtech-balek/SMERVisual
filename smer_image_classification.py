@@ -6,18 +6,21 @@ from typing import Union
 from sklearn.linear_model import LogisticRegression
 import numpy as np
 import torch
-from openai import OpenAI, Embedding
+from openai import OpenAI
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import os
 
 
 class ImageClassifier:
-    def __init__(self, use_openai=True, openai_model = None, openai_key=None, local_model_path=None):
+    def __init__(self, data: Union[str, PathLike], use_openai=True, openai_model=None, openai_key=None,
+                 local_model_path=None):
         """
         Initialize the ImageClassifier with OpenAI API or a local model.
         :param use_openai: Boolean flag to determine whether to use OpenAI API or a local model.
         :param openai_key: API key for OpenAI (required if use_openai is True).
         :param local_model_path: Custom local model object to be used (required if use_openai is False).
         """
+        self.data_folder = data
         self.model_host = "openai" if use_openai else "local"
         if self.model_host == "openai":
             if not openai_key:
@@ -36,52 +39,49 @@ class ImageClassifier:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.model.to(self.device)
 
-    def __call__(self, file, prompt = 'Describe this image in 7 words.'):
+    def __call__(self, file, prompt='Describe this image in 7 words.'):
         getattr(self, f"_{self.model_host}_image_description")(file, prompt)
-    def _openai_image_description(self, file: Union[PathLike, str], prompt: str) -> Union[str, None]:
+
+    def _openai_image_description(self, prompt: str) -> Union[str, None]:
         """
         Generate image description with the use of OpenAI API.
-        :param file: path to a jpeg file
-        :type file: PathLike or str
         :param prompt: Text specification of the instruction for the LLM.
         :type prompt: str
-        :param model: OpenAI model to use
-        :type model: str
         :return: Text description of the image if no exception occurs, None otherwise
         """
-        client = OpenAI(api_key=self.open_ai_key)
+        self.client = OpenAI(api_key=self.open_ai_key)
 
-        encoded_image = self.encode_image(file)
-        try:
-            # Create the GPT-4o API request
-            response = client.chat.completions.create(
-                model=self.open_ai_model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": prompt
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url":
-                                    {
-                                        "url": f"data:image/png;base64,{encoded_image}"
-                                    }
-                            },
-                        ],
-                    }
-                ],
-                max_tokens=20,
-            )
+        for file in self._get_image_files(self.data_folder):
+            encoded_image = self.encode_image(file)
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.open_ai_model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": prompt
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url":
+                                        {
+                                            "url": f"data:image/png;base64,{encoded_image}"
+                                        }
+                                },
+                            ],
+                        }
+                    ],
+                    max_tokens=20,
+                )
 
-            # Extract and return the description
-            return response.choices[0].message.content
-        except Exception as e:
-            print(f'Error: {e}')
-            return None
+                # Extract and return the description
+                yield self._get_all_embeddings(response.choices[0].message.content)
+            except Exception as e:
+                print(f'Error: {e}')
+                yield None
 
     def _local_image_description(self, file: Union[PathLike, str], prompt: str) -> Union[str, None]:
         """
@@ -105,8 +105,7 @@ class ImageClassifier:
             print(f'Error: {e}')
             return None
 
-    @staticmethod
-    def get_all_embeddings(sentence: str) -> np.array:
+    def _get_all_embeddings(self, sentence: str) -> np.array:
         """
         Generate embeddings for the image's word description.
         :param sentence: Word description of an image.
@@ -118,7 +117,7 @@ class ImageClassifier:
 
         for word in words:
             try:
-                response = Embedding.create(
+                response = self.client.embeddings.create(
                     input=word,
                     model="text-embedding-ada-002"
                 )
@@ -137,19 +136,18 @@ class ImageClassifier:
 
         # Extract features and labels
         X = np.stack(df['aggregated_embedding'].values)
-        #y = df['Class'].apply(lambda x: 1 if x == 'vase' else 0)  # Binary encoding: vase=1, hotpot=0
+        # y = df['Class'].apply(lambda x: 1 if x == 'vase' else 0)  # Binary encoding: vase=1, hotpot=0
         y = df['Class']
-
 
         train_size = 2000
         X_train = X[:train_size]
-        X_test = X[train_size+1:]
-        X_test_embeddings = df['Embedding'][train_size+1:].reset_index(drop=True)
+        X_test = X[train_size + 1:]
+        X_test_embeddings = df['Embedding'][train_size + 1:].reset_index(drop=True)
 
         y_train = y[:train_size]
-        y_test = y[train_size+1:]
+        y_test = y[train_size + 1:]
         # Split the data
-        #X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        # X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
         # Train a Random Forest classifier
         model = LogisticRegression()
@@ -202,7 +200,8 @@ class ImageClassifier:
                 # Calculate the embeddings for the perturbed text
                 perturbed_words = perturbed_text.split()
                 print(perturbed_words)
-                perturbed_word_indices = [description.split().index(w) for w in perturbed_words if w in description.split()]
+                perturbed_word_indices = [description.split().index(w) for w in perturbed_words if
+                                          w in description.split()]
                 print(perturbed_word_indices)
                 perturbed_word_embeddings = [df['Embedding'].iloc[idx][i] for i in perturbed_word_indices]
                 print(len(perturbed_word_embeddings))
@@ -262,7 +261,17 @@ class ImageClassifier:
         """Flatten the list of lists and take the mean along the axis"""
         return np.mean(embedding_list, axis=0)
 
+    @staticmethod
+    def _get_image_files(folder_path):
+        valid_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff')
+        for root, dirs, files in os.walk(folder_path):
+            for file in files:
+                if file.lower().endswith(valid_extensions):
+                    yield os.path.join(root, file)
+
+
 class ImageLabeler:
     """Label data using Large Language Model"""
+
     def __init__(self):
         pass
