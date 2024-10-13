@@ -1,4 +1,6 @@
 import base64
+
+import pandas as pd
 from openai import OpenAI, Embedding
 import base64
 from os import PathLike
@@ -40,7 +42,9 @@ class ImageClassifier:
             self.model.to(self.device)
 
     def __call__(self, file, prompt='Describe this image in 7 words.'):
-        getattr(self, f"_{self.model_host}_image_description")(file, prompt)
+        self.dataset = pd.DataFrame(getattr(self, f"_{self.model_host}_image_description")(file, prompt),
+                                    columns=['Image, Description', 'Embedding'])
+        self.dataset.to_csv('embedded_dataset.csv')
 
     def _openai_image_description(self, prompt: str) -> Union[str, None]:
         """
@@ -78,10 +82,10 @@ class ImageClassifier:
                 )
 
                 # Extract and return the description
-                yield self._get_all_embeddings(response.choices[0].message.content)
+                yield file, response.choices[0].message.content, self._get_all_embeddings(response.choices[0].message.content)
             except Exception as e:
                 print(f'Error: {e}')
-                yield None
+                yield file, None, np.zeros(1536)
 
     def _local_image_description(self, file: Union[PathLike, str], prompt: str) -> Union[str, None]:
         """
@@ -121,8 +125,7 @@ class ImageClassifier:
                     input=word,
                     model="text-embedding-ada-002"
                 )
-                word_embedding = response['data'][0]['embedding']
-                embeddings.append(np.array(word_embedding))
+                embeddings.append(np.array(response))
             except Exception as e:
                 print(f"Error generating embedding for '{word}': {e}")
 
@@ -257,7 +260,7 @@ class ImageClassifier:
         return base64.b64encode(image_data).decode('utf-8')
 
     @staticmethod
-    def aggregate_embeddings(embedding_list):
+    def _aggregate_embeddings(embedding_list):
         """Flatten the list of lists and take the mean along the axis"""
         return np.mean(embedding_list, axis=0)
 
