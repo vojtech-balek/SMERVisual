@@ -41,9 +41,9 @@ class ImageClassifier:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.model.to(self.device)
 
-    def __call__(self, file, prompt='Describe this image in 7 words.'):
-        self.dataset = pd.DataFrame(getattr(self, f"_{self.model_host}_image_description")(file, prompt),
-                                    columns=['Image, Description', 'Embedding'])
+    def __call__(self, prompt='Describe this image in 7 words.'):
+        self.dataset = pd.DataFrame(getattr(self, f"_{self.model_host}_image_description")(prompt),
+                                    columns=['Image', 'Description', 'Embedding'])
         self.dataset['Aggregated_embedding'] = self.dataset['Embedding'].apply(self._aggregate_embeddings)
         self.dataset.to_csv('embedded_dataset.csv')
 
@@ -126,7 +126,7 @@ class ImageClassifier:
                     input=word,
                     model="text-embedding-ada-002"
                 )
-                embeddings.append(np.array(response))
+                embeddings.append(list(response.data[0].embedding))
             except Exception as e:
                 print(f"Error generating embedding for '{word}': {e}")
 
@@ -263,7 +263,7 @@ class ImageClassifier:
     @staticmethod
     def _aggregate_embeddings(embedding_list):
         """Flatten the list of lists and take the mean along the axis"""
-        return np.mean(embedding_list, axis=0)
+        return np.mean(np.array(embedding_list), axis=0)
 
     @staticmethod
     def _get_image_files(folder_path):
