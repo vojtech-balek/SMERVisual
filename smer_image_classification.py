@@ -44,6 +44,7 @@ class ImageClassifier:
     def __call__(self, file, prompt='Describe this image in 7 words.'):
         self.dataset = pd.DataFrame(getattr(self, f"_{self.model_host}_image_description")(file, prompt),
                                     columns=['Image, Description', 'Embedding'])
+        self.dataset['Aggregated_embedding'] = self.dataset['Embedding'].apply(self._aggregate_embeddings)
         self.dataset.to_csv('embedded_dataset.csv')
 
     def _openai_image_description(self, prompt: str) -> Union[str, None]:
