@@ -148,7 +148,7 @@ class ImageClassifier:
             return np.zeros(1536)  # ADA embedding size is 1536
 
     def classify_with_logreg(self):
-
+        """Use logistic regression to classify the instances and get feature weights."""
         # Extract features and labels
         X = np.stack(self.dataset['Aggregated_embedding'].values)
         y = self.dataset['Label']
