@@ -354,7 +354,13 @@ class ImageClassifier:
         plt.show()
 
     @staticmethod
-    def _preprocess_text(text):
+    def _preprocess_text(text: str)-> str:
+        """
+        Preprocess the image descriptions.
+        :param text: word description of the image
+        :type text: string
+        :return: lemmatized, normalized text
+        """
         # Split the text on commas
         try:
             nlp = spacy.load('en_core_web_sm')
@@ -398,8 +404,11 @@ class ImageClassifier:
 
     @staticmethod
     def _get_image_files_with_class(folder_path):
+        """Load images with labels based on their parent directory name.
+        :param folder_path: path to directory subfolders with images
+        :type folder_path: str
+        """
         valid_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff')
-
         for root, dirs, files in os.walk(folder_path):
             for file in files:
                 if file.lower().endswith(valid_extensions):
