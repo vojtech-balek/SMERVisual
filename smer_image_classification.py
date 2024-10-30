@@ -1,4 +1,5 @@
 import base64
+from tkinter import Image
 
 import pandas as pd
 from openai import OpenAI, Embedding
@@ -9,7 +10,9 @@ from sklearn.linear_model import LogisticRegression
 import numpy as np
 import torch
 from openai import OpenAI
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
+from transformers import MllamaForConditionalGeneration, AutoProcessor
+
 import os
 from sklearn.model_selection import train_test_split
 import re
@@ -17,11 +20,12 @@ import spacy
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
+from PIL import Image
 
 
 class ImageClassifier:
-    def __init__(self, data: Union[str, PathLike], use_openai=True, openai_model=None, openai_key=None,
-                 local_model_path=None):
+    def __init__(self, openai_model=None, openai_embedding = None, openai_key=None,
+                 local_model_path=None, local_embedding_path = None):
         """
         Initialize the ImageClassifier with OpenAI API or a local model.
         :param use_openai: Boolean flag to determine whether to use OpenAI API or a local model.
@@ -30,8 +34,7 @@ class ImageClassifier:
         """
         self.df_AOPC = None
         self.logreg_model = None
-        self.data_folder = data
-        self.model_host = "openai" if use_openai else "local"
+        self.model_host = "openai" if openai_model else "local"
         if self.model_host == "openai":
             if not openai_key:
                 raise ValueError("OpenAI key must be provided when using OpenAI API.")
@@ -39,17 +42,25 @@ class ImageClassifier:
                 raise ValueError("OpenAI model must be provided when using OpenAI API.")
             self.open_ai_key = openai_key
             self.open_ai_model = openai_model
+            self.openai_embedding = openai_embedding
 
         else:
             if not local_model_path:
                 raise ValueError("Local model must be provided when not using OpenAI API.")
 
             self.tokenizer = AutoTokenizer.from_pretrained(local_model_path)
-            self.model = AutoModelForCausalLM.from_pretrained(local_model_path)
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            self.model.to(self.device)
+            # model_id = "unsloth/Llama-3.2-11B-Vision-Instruct"
+            self.local_embedding = local_embedding_path
+            self.model = MllamaForConditionalGeneration.from_pretrained(
+                local_model_path,
+                torch_dtype=torch.bfloat16,
+                device_map="auto",
+            )
+            self.processor = AutoProcessor.from_pretrained(local_model_path)
 
-    def __call__(self, prompt='Describe this image in 7 words.'):
+
+    def __call__(self, data: Union[str, PathLike], prompt='You are a helpful assistant to help users describe images.', ):
+        self.data_folder = data
         self.dataset = pd.DataFrame(getattr(self, f"_{self.model_host}_image_description")(prompt),
                                     columns=['Image', 'Description', 'Embedding', 'Label'])
         self.dataset['Aggregated_embedding'] = self.dataset['Embedding'].apply(self._aggregate_embeddings)
@@ -99,27 +110,62 @@ class ImageClassifier:
                 print(f'Error: {e}')
                 yield file, None, np.zeros(1536)
 
-    def _local_image_description(self, file: Union[PathLike, str], prompt: str) -> Union[str, None]:
+    def _local_image_description(self, prompt: str) -> Union[str, None]:
         """
         Generate image description using the local Hugging Face transformer model.
         :param file: Path to the image file.
         :param prompt: Text prompt for the model.
         :return: Generated description.
         """
-        try:
-            encoded_image = self._encode_image(file)
+        for file, label in self._get_image_files_with_class(self.data_folder):
+            # try:
+            # encoded_image = self._encode_image(file)
+            encoded_image = Image.open(file)
+            message = [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": prompt}]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image"
+                        },
+                        {
+                            "type": "text",
+                            "text": "Describe this image in 7 words. Articles and prepositions count as words. Make sure to use exactly 7 words, be concise."
+                        },
 
-            input_text = f"{prompt} Image: {encoded_image}"
+                    ]
+                }
 
-            inputs = self.tokenizer(input_text, return_tensors="pt").to(self.device)
 
-            outputs = self.model.generate(inputs.input_ids, max_length=50)
+            ]
+            input_text = self.processor.apply_chat_template(message, add_generation_prompt=True)
+            inputs = self.processor(
+                encoded_image,
+                input_text,
+                add_special_tokens=False,
+                return_tensors="pt"
+            ).to(self.model.device)
 
-            return self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            output = self.model.generate(**inputs, max_new_tokens=30)
+            # print(output.split('assistant')[1])
+            # decoded_output = output.split('assistant')[1]
+            decoded_output = self.tokenizer.decode(output[0], skip_special_tokens=True).strip()
+            decoded_output = decoded_output.strip()
+            decoded_output = decoded_output.split('assistant\n\n')[1]
+            print(f">{ decoded_output = }<")
+            print(len(decoded_output.split()))
+            torch.cuda.empty_cache()
+            del output
+            yield file, decoded_output, self._get_local_embeddings(decoded_output), label
 
-        except Exception as e:
-            print(f'Error: {e}')
-            return None
+            # except Exception as e:
+            #         print(f'Error: {e}')
+            #         return None
 
     def _get_all_embeddings(self, sentence: str) -> np.array:
         """
@@ -146,6 +192,24 @@ class ImageClassifier:
             return embeddings
         else:
             return np.zeros(1536)  # ADA embedding size is 1536
+
+    def _get_local_embeddings(self, sentence:str)->np.array:
+        self.bert_tokenizer = AutoTokenizer.from_pretrained(self.local_embedding)
+        self.embedding_model = AutoModel.from_pretrained(self.local_embedding)
+
+        self.device = torch.device('cpu' if torch.cuda.is_available() else 'cpu')
+        self.embedding_model.to(self.device)
+        embeddings = []
+        for word in sentence.split():
+            inputs = self.bert_tokenizer(word, return_tensors='pt', padding=True, truncation=True, max_length=512)
+            inputs = {key: value.to(self.device) for key, value in inputs.items()}  # Move inputs to GPU
+            with torch.no_grad():
+                outputs = self.embedding_model(**inputs)
+
+            # Get the embeddings from the [CLS] token
+            embeddings.append(outputs.last_hidden_state[:, 0, :].cpu().numpy())  # Move embeddings back to CPU
+        return embeddings
+
 
     def classify_with_logreg(self):
         """Use logistic regression to classify the instances and get feature weights."""
@@ -416,10 +480,3 @@ class ImageClassifier:
                     class_name = os.path.basename(root)
 
                     yield image_path, class_name
-
-
-class ImageLabeler:
-    """Label data using Large Language Model"""
-
-    def __init__(self):
-        pass
