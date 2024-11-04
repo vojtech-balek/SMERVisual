@@ -105,7 +105,7 @@ class ImageClassifier:
                 )
 
                 # Extract and yield the description
-                yield file, response.choices[0].message.content, self._get_all_embeddings(
+                yield file, response.choices[0].message.content, self._get_openai_embeddings(
                     response.choices[0].message.content), label
             except Exception as e:
                 print(f'Error: {e}')
@@ -165,9 +165,9 @@ class ImageClassifier:
             #         print(f'Error: {e}')
             #         return None
 
-    def _get_all_embeddings(self, sentence: str) -> np.array:
+    def _get_openai_embeddings(self, sentence: str) -> np.array:
         """
-        Generate embeddings for the image's word description.
+        Generate embeddings for the image's word description using openai.
         :param sentence: Word description of an image.
         :type sentence: str
         :return: Embedding of length 1536
@@ -179,7 +179,7 @@ class ImageClassifier:
             try:
                 response = self.client.embeddings.create(
                     input=word,
-                    model="text-embedding-ada-002"
+                    model=self.openai_embedding
                 )
                 embeddings.append(list(response.data[0].embedding))
             except Exception as e:
@@ -192,6 +192,12 @@ class ImageClassifier:
             return np.zeros(1536)  # ADA embedding size is 1536
 
     def _get_local_embeddings(self, sentence: str) -> np.array:
+        """
+        Generate embeddings for the image's word description.
+        :param sentence: Word description of an image.
+        :type sentence: str
+        :return: Embedding of length 1536
+        """
         self.bert_tokenizer = AutoTokenizer.from_pretrained(self.local_embedding)
         self.embedding_model = AutoModel.from_pretrained(self.local_embedding)
 
@@ -205,8 +211,6 @@ class ImageClassifier:
                 outputs = self.embedding_model(**inputs)
 
             # Get the embeddings from the [CLS] token
-            # print(f'Ndim: {outputs.last_hidden_state[:, 0, :].cpu().numpy().ndim}')
-            # print(f"Shape: {outputs.last_hidden_state[:, 0, :].cpu().numpy().shape}")
             embeddings.append(np.squeeze(outputs.last_hidden_state[:, 0, :].cpu().numpy()))  # Move embeddings back to CPU
         return embeddings
 
