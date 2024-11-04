@@ -12,6 +12,7 @@ import torch
 from openai import OpenAI
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
 from transformers import MllamaForConditionalGeneration, AutoProcessor
+
 import os
 from sklearn.model_selection import train_test_split
 import re
@@ -118,51 +119,50 @@ class ImageClassifier:
         :return: Generated description.
         """
         for file, label in self._get_image_files_with_class(self.data_folder):
-            # try:
-            # encoded_image = self._encode_image(file)
-            encoded_image = Image.open(file)
-            message = [
-                {
-                    "role": "system",
-                    "content": [
-                        {"type": "text", "text": prompt}]
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image"
-                        },
-                        {
-                            "type": "text",
-                            "text": "Describe this image in 7 words. Articles and prepositions count as words. Make sure to use exactly 7 words, be concise."
-                        },
+            try:
+                encoded_image = Image.open(file)
+                message = [
+                    {
+                        "role": "system",
+                        "content": [
+                            {"type": "text", "text": prompt}]
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image"
+                            },
+                            {
+                                "type": "text",
+                                "text": "Describe this image in 7 words. Articles and prepositions count as words. Make sure to use exactly 7 words, be concise."
+                            },
 
-                    ]
-                }
+                        ]
+                    }
 
-            ]
-            input_text = self.processor.apply_chat_template(message, add_generation_prompt=True)
-            inputs = self.processor(
-                encoded_image,
-                input_text,
-                add_special_tokens=False,
-                return_tensors="pt"
-            ).to(self.model.device)
+                ]
+                input_text = self.processor.apply_chat_template(message, add_generation_prompt=True)
+                inputs = self.processor(
+                    encoded_image,
+                    input_text,
+                    add_special_tokens=False,
+                    return_tensors="pt"
+                ).to(self.model.device)
 
-            output = self.model.generate(**inputs, max_new_tokens=30)
-            decoded_output = self.tokenizer.decode(output[0], skip_special_tokens=True).strip()
-            decoded_output = decoded_output.strip()
-            decoded_output = decoded_output.split('assistant\n\n')[1]
-            print(f">{ decoded_output = }<")
-            print(file)
-            torch.cuda.empty_cache()
-            del output
-            yield file, decoded_output, self._get_local_embeddings(decoded_output), label
+                output = self.model.generate(**inputs, max_new_tokens=30)
+                decoded_output = self.tokenizer.decode(output[0], skip_special_tokens=True).strip()
+                decoded_output = decoded_output.strip()
+                decoded_output = decoded_output.split('assistant\n\n')[1]
+                print(f">{ decoded_output = }<")
+                print(file)
+                torch.cuda.empty_cache()
+                del output
+                yield file, decoded_output, self._get_local_embeddings(decoded_output), label
 
-            # except Exception as e:
-            #         print(f'Error: {e}')
-            #         return None
+            except Exception as e:
+                    print(f'Error: {e}')
+                    return None
 
     def _get_openai_embeddings(self, sentence: str) -> np.array:
         """
