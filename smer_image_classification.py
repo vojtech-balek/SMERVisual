@@ -24,8 +24,8 @@ from PIL import Image
 
 
 class ImageClassifier:
-    def __init__(self, openai_model=None, openai_embedding = None, openai_key=None,
-                 local_model_path=None, local_embedding_path = None):
+    def __init__(self, openai_model=None, openai_embedding=None, openai_key=None,
+                 local_model_path=None, local_embedding_path=None):
         """
         Initialize the ImageClassifier with OpenAI API or a local model.
         :param use_openai: Boolean flag to determine whether to use OpenAI API or a local model.
@@ -49,7 +49,6 @@ class ImageClassifier:
                 raise ValueError("Local model must be provided when not using OpenAI API.")
 
             self.tokenizer = AutoTokenizer.from_pretrained(local_model_path)
-            # model_id = "unsloth/Llama-3.2-11B-Vision-Instruct"
             self.local_embedding = local_embedding_path
             self.model = MllamaForConditionalGeneration.from_pretrained(
                 local_model_path,
@@ -58,12 +57,13 @@ class ImageClassifier:
             )
             self.processor = AutoProcessor.from_pretrained(local_model_path)
 
-
-    def __call__(self, data: Union[str, PathLike], prompt='You are a helpful assistant to help users describe images.', ):
+    def __call__(self, data: Union[str, PathLike],
+                 prompt='You are a helpful assistant to help users describe images.', ):
         self.data_folder = data
         self.dataset = pd.DataFrame(getattr(self, f"_{self.model_host}_image_description")(prompt),
                                     columns=['Image', 'Description', 'Embedding', 'Label'])
         self.dataset['Aggregated_embedding'] = self.dataset['Embedding'].apply(self._aggregate_embeddings)
+        self.dataset.to_csv('embedded_dataset.csv')
         self.classify_with_logreg()
         self.plot_important_words()
         self.plot_aopc()
@@ -105,7 +105,8 @@ class ImageClassifier:
                 )
 
                 # Extract and yield the description
-                yield file, response.choices[0].message.content, self._get_all_embeddings(response.choices[0].message.content), label
+                yield file, response.choices[0].message.content, self._get_all_embeddings(
+                    response.choices[0].message.content), label
             except Exception as e:
                 print(f'Error: {e}')
                 yield file, None, np.zeros(1536)
@@ -141,7 +142,6 @@ class ImageClassifier:
                     ]
                 }
 
-
             ]
             input_text = self.processor.apply_chat_template(message, add_generation_prompt=True)
             inputs = self.processor(
@@ -152,13 +152,11 @@ class ImageClassifier:
             ).to(self.model.device)
 
             output = self.model.generate(**inputs, max_new_tokens=30)
-            # print(output.split('assistant')[1])
-            # decoded_output = output.split('assistant')[1]
             decoded_output = self.tokenizer.decode(output[0], skip_special_tokens=True).strip()
             decoded_output = decoded_output.strip()
             decoded_output = decoded_output.split('assistant\n\n')[1]
             print(f">{ decoded_output = }<")
-            print(len(decoded_output.split()))
+            print(file)
             torch.cuda.empty_cache()
             del output
             yield file, decoded_output, self._get_local_embeddings(decoded_output), label
@@ -193,7 +191,7 @@ class ImageClassifier:
         else:
             return np.zeros(1536)  # ADA embedding size is 1536
 
-    def _get_local_embeddings(self, sentence:str)->np.array:
+    def _get_local_embeddings(self, sentence: str) -> np.array:
         self.bert_tokenizer = AutoTokenizer.from_pretrained(self.local_embedding)
         self.embedding_model = AutoModel.from_pretrained(self.local_embedding)
 
@@ -207,20 +205,26 @@ class ImageClassifier:
                 outputs = self.embedding_model(**inputs)
 
             # Get the embeddings from the [CLS] token
-            embeddings.append(outputs.last_hidden_state[:, 0, :].cpu().numpy())  # Move embeddings back to CPU
+            # print(f'Ndim: {outputs.last_hidden_state[:, 0, :].cpu().numpy().ndim}')
+            # print(f"Shape: {outputs.last_hidden_state[:, 0, :].cpu().numpy().shape}")
+            embeddings.append(np.squeeze(outputs.last_hidden_state[:, 0, :].cpu().numpy()))  # Move embeddings back to CPU
         return embeddings
-
 
     def classify_with_logreg(self):
         """Use logistic regression to classify the instances and get feature weights."""
         # Extract features and labels
         X = np.stack(self.dataset['Aggregated_embedding'].values)
+        # if X.ndim != 2:
+        #     X = np.squeeze(X, axis=1)
         y = self.dataset['Label']
 
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
         # Train a LogReg classifier
         self.logreg_model = LogisticRegression()
+        print(X_train.shape)
+        print(self.dataset['Aggregated_embedding'].shape)
+        print(y_train.shape)
         self.logreg_model.fit(X_train, y_train)
 
         accuracy = self.logreg_model.score(X_test, y_test)
@@ -250,8 +254,8 @@ class ImageClassifier:
             original_embeddings = np.array(original_embeddings)
 
             # Ensure embeddings array is 2D (samples, features)
-            if original_embeddings.ndim != 2 or original_embeddings.shape[1] != 1536:
-                raise ValueError(f"Expected 2D array with 1536 features, got shape {original_embeddings.shape}")
+            # if original_embeddings.ndim != 2 or original_embeddings.shape[1] != 1536:
+            #     raise ValueError(f"Expected 2D array with 1536 features, got shape {original_embeddings.shape}")
 
             # Predict probabilities using the trained Logistic Regression model
             original_prob = self.logreg_model.predict_proba(original_embeddings)[0]
@@ -269,7 +273,8 @@ class ImageClassifier:
                 # Calculate the embeddings for the perturbed text
                 perturbed_words = perturbed_text.split()
                 print(perturbed_words)
-                perturbed_word_indices = [description.split().index(w) for w in perturbed_words if w in description.split()]
+                perturbed_word_indices = [description.split().index(w) for w in perturbed_words if
+                                          w in description.split()]
                 print(perturbed_word_indices)
                 perturbed_word_embeddings = [self.dataset['Embedding'].iloc[idx][i] for i in perturbed_word_indices]
                 print(len(perturbed_word_embeddings))
@@ -283,9 +288,9 @@ class ImageClassifier:
 
                 perturbed_embeddings = np.array([perturbed_aggregated_embedding])
 
-                # Ensure embeddings array is 2D (samples, features)
-                if perturbed_embeddings.ndim != 2 or perturbed_embeddings.shape[1] != 1536:
-                    raise ValueError(f"Expected 2D array with 1536 features, got shape {perturbed_embeddings.shape}")
+                # # Ensure embeddings array is 2D (samples, features)
+                # if perturbed_embeddings.ndim != 2 or perturbed_embeddings.shape[1] != 1536:
+                #     raise ValueError(f"Expected 2D array with 1536 features, got shape {perturbed_embeddings.shape}")
 
                 # Predict probabilities using the trained Logistic Regression model
                 perturbed_prob = self.logreg_model.predict_proba(perturbed_embeddings)[0]
@@ -311,9 +316,10 @@ class ImageClassifier:
             sorted_words_str = ','.join(sorted_words_list)
             self.dataset.at[idx, 'Sorted_Words_by_Importance'] = sorted_words_str
 
-        self.dataset['Sorted_Words_by_Importance_processed'] = self.dataset['Sorted_Words_by_Importance'].apply(self._preprocess_text)
+        self.dataset['Sorted_Words_by_Importance_processed'] = self.dataset['Sorted_Words_by_Importance'].apply(
+            self._preprocess_text)
 
-        self.df_AOPC = self.dataset[X_train.shape[0]+1:].reset_index(drop=True)
+        self.df_AOPC = self.dataset[X_train.shape[0] + 1:].reset_index(drop=True)
 
     def plot_aopc(self):
         # Calculate AOPC by iteratively removing the most important word for each description
@@ -330,7 +336,8 @@ class ImageClassifier:
                 # Calculate original probability
                 original_word_indices = [i for word, i in word_to_index.items()]
                 original_embeddings = [np.array(row['Embedding'][i]) for i in original_word_indices]
-                original_aggregated_embedding = np.mean(original_embeddings, axis=0) if original_embeddings else np.zeros(VECTOR_SIZE)
+                original_aggregated_embedding = np.mean(original_embeddings,
+                                                        axis=0) if original_embeddings else np.zeros(VECTOR_SIZE)
                 original_probs = self.logreg_model.predict_proba([original_aggregated_embedding])[0]
                 original_class = np.argmax(original_probs)  # Determine the predicted class
                 original_prob = original_probs[original_class]
@@ -349,7 +356,8 @@ class ImageClassifier:
                         temp_text = ' '.join(w for w in words if w != word)
                         temp_word_indices = [word_to_index[w] for w in temp_text.split() if w in word_to_index]
                         temp_embeddings = [np.array(row['Embedding'][i]) for i in temp_word_indices]
-                        temp_aggregated_embedding = np.mean(temp_embeddings, axis=0) if temp_embeddings else np.zeros(VECTOR_SIZE)
+                        temp_aggregated_embedding = np.mean(temp_embeddings, axis=0) if temp_embeddings else np.zeros(
+                            VECTOR_SIZE)
                         temp_prob = self.logreg_model.predict_proba([temp_aggregated_embedding])[0][original_class]
 
                         # Calculate the drop in probability
@@ -366,8 +374,10 @@ class ImageClassifier:
                         # Recalculate the probability after removing the word
                         altered_word_indices = [word_to_index[w] for w in altered_text.split() if w in word_to_index]
                         altered_embeddings = [np.array(row['Embedding'][i]) for i in altered_word_indices]
-                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(VECTOR_SIZE)
-                        altered_prob = self.logreg_model.predict_proba([altered_aggregated_embedding])[0][original_class]
+                        altered_aggregated_embedding = np.mean(altered_embeddings,
+                                                               axis=0) if altered_embeddings else np.zeros(VECTOR_SIZE)
+                        altered_prob = self.logreg_model.predict_proba([altered_aggregated_embedding])[0][
+                            original_class]
                     else:
                         altered_prob = original_prob
 
@@ -418,7 +428,7 @@ class ImageClassifier:
         plt.show()
 
     @staticmethod
-    def _preprocess_text(text: str)-> str:
+    def _preprocess_text(text: str) -> str:
         """
         Preprocess the image descriptions.
         :param text: word description of the image
@@ -475,7 +485,7 @@ class ImageClassifier:
         valid_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff')
         for root, dirs, files in os.walk(folder_path):
             for file in files:
-                if file.lower().endswith(valid_extensions):
+                if file.lower().endswith(valid_extensions) and '.ipynb_checkpoints' not in root:
                     image_path = os.path.join(root, file)
                     class_name = os.path.basename(root)
 
