@@ -1,1 +1,1 @@
-# smer-image-classification
+# SMERVisual
