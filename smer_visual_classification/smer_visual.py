@@ -1,8 +1,5 @@
-import base64
 from tkinter import Image
-
 import pandas as pd
-from openai import OpenAI, Embedding
 import base64
 from os import PathLike
 from typing import Union
@@ -12,7 +9,6 @@ import torch
 from openai import OpenAI
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
 from transformers import MllamaForConditionalGeneration, AutoProcessor
-
 import os
 from sklearn.model_selection import train_test_split
 import re
@@ -58,9 +54,13 @@ class ImageClassifier:
             self.processor = AutoProcessor.from_pretrained(local_model_path)
 
     def __call__(self, data: Union[str, PathLike],
-                 prompt='You are a helpful assistant to help users describe images.', ):
+                 system_prompt='You are a helpful assistant to help users describe images.',
+                 user_prompt='Describe this image in 7 words. '
+                             'Be concise, try to maximize the information about the image.', verbose=False):
+        self.system_prompt = system_prompt
+        self.user_prompt = user_prompt
         self.data_folder = data
-        self.dataset = pd.DataFrame(getattr(self, f"_{self.model_host}_image_description")(prompt),
+        self.dataset = pd.DataFrame(getattr(self, f"_{self.model_host}_image_description")(),
                                     columns=['Image', 'Description', 'Embedding', 'Label'])
         self.dataset['Aggregated_embedding'] = self.dataset['Embedding'].apply(self._aggregate_embeddings)
         self.dataset.to_csv('embedded_dataset.csv')
@@ -69,7 +69,7 @@ class ImageClassifier:
         self.plot_aopc()
         self.dataset.to_csv('embedded_dataset.csv')
 
-    def _openai_image_description(self, prompt: str) -> Union[str, None]:
+    def _openai_image_description(self) -> Union[str, None]:
         """
         Generate image description with the use of OpenAI API.
         :param prompt: Text specification of the instruction for the LLM.
@@ -89,7 +89,7 @@ class ImageClassifier:
                             "content": [
                                 {
                                     "type": "text",
-                                    "text": prompt
+                                    "text": self.user_prompt
                                 },
                                 {
                                     "type": "image_url",
@@ -125,7 +125,7 @@ class ImageClassifier:
                     {
                         "role": "system",
                         "content": [
-                            {"type": "text", "text": prompt}]
+                            {"type": "text", "text": self.system_prompt}]
                     },
                     {
                         "role": "user",
@@ -135,7 +135,7 @@ class ImageClassifier:
                             },
                             {
                                 "type": "text",
-                                "text": "Describe this image in 7 words. Articles and prepositions count as words. Make sure to use exactly 7 words, be concise."
+                                "text": self.user_prompt
                             },
 
                         ]
@@ -154,15 +154,13 @@ class ImageClassifier:
                 decoded_output = self.tokenizer.decode(output[0], skip_special_tokens=True).strip()
                 decoded_output = decoded_output.strip()
                 decoded_output = decoded_output.split('assistant\n\n')[1]
-                print(f">{ decoded_output = }<")
-                print(file)
                 torch.cuda.empty_cache()
                 del output
                 yield file, decoded_output, self._get_local_embeddings(decoded_output), label
 
             except Exception as e:
-                    print(f'Error: {e}')
-                    return None
+                print(f'Error: {e}')
+                return None
 
     def _get_openai_embeddings(self, sentence: str) -> np.array:
         """
@@ -210,7 +208,8 @@ class ImageClassifier:
                 outputs = self.embedding_model(**inputs)
 
             # Get the embeddings from the [CLS] token
-            embeddings.append(np.squeeze(outputs.last_hidden_state[:, 0, :].cpu().numpy()))  # Move embeddings back to CPU
+            embeddings.append(
+                np.squeeze(outputs.last_hidden_state[:, 0, :].cpu().numpy()))  # Move embeddings back to CPU
         return embeddings
 
     def classify_with_logreg(self):
@@ -253,7 +252,8 @@ class ImageClassifier:
             for word in words:
                 perturbed_text = ' '.join(w for w in words if w != word)
                 perturbed_words = perturbed_text.split()
-                perturbed_word_indices = [description.split().index(w) for w in perturbed_words if w in description.split()]
+                perturbed_word_indices = [description.split().index(w) for w in perturbed_words if
+                                          w in description.split()]
                 perturbed_word_embeddings = [self.dataset['Embedding'].iloc[idx][i] for i in perturbed_word_indices]
 
                 if perturbed_word_embeddings:
@@ -360,6 +360,7 @@ class ImageClassifier:
         plt.show()
 
     def plot_important_words(self):
+        """"""
         # Initialize a list to store the most important words
         most_important_words = []
 
