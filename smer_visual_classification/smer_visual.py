@@ -391,6 +391,12 @@ class ImageClassifier:
         # Show plot
         plt.show()
 
+    def _get_bounding_boxes_openai(self):
+        """TODO"""
+
+    def _get_boundingboxes_local(self):
+        """TODO"""
+
     @staticmethod
     def _preprocess_text(text: str) -> str:
         """
