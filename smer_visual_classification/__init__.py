@@ -1,1 +1,1 @@
-import smer_visual
+from .smer_visual import ImageClassifier

@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
 from PIL import Image
+from lime.lime_text import LimeTextExplainer
 
 
 class ImageClassifier:
@@ -111,7 +112,7 @@ class ImageClassifier:
                 print(f'Error: {e}')
                 yield file, None, np.zeros(1536)
 
-    def _local_image_description(self, prompt: str) -> Union[str, None]:
+    def _local_image_description(self) -> Union[str, None]:
         """
         Generate image description using the local Hugging Face transformer model.
         :param file: Path to the image file.
@@ -206,7 +207,6 @@ class ImageClassifier:
             inputs = {key: value.to(self.device) for key, value in inputs.items()}  # Move inputs to GPU
             with torch.no_grad():
                 outputs = self.embedding_model(**inputs)
-
             # Get the embeddings from the [CLS] token
             embeddings.append(
                 np.squeeze(outputs.last_hidden_state[:, 0, :].cpu().numpy()))  # Move embeddings back to CPU
@@ -284,80 +284,109 @@ class ImageClassifier:
         self.df_AOPC = self.dataset[X_train.shape[0] + 1:].reset_index(drop=True)
 
     def plot_aopc(self):
-        """"""
-        # Calculate AOPC by iteratively removing the most important word for each description
-        VECTOR_SIZE = 1536
+        """
+        Plot Average Output Probability Change (AOPC) as a function of iteratively removing important words,
+        with calculations for both SMER and LIME explanations within a single loop.
+        """
+        VECTOR_SIZE = 1536 if self.model_host == "openai" else 384
         max_K = 6  # Maximum number of top words to remove
-        avg_drops = []
+        avg_drops_SMER = []
+        avg_drops_LIME = []
+        explainer = LimeTextExplainer(class_names=self.dataset['Label'].unique())
 
-        for K in tqdm(range(1, max_K + 1)):  # Loop through K from 1 to max_K (10)
-            drops = []
+        for K in tqdm(range(1, max_K + 1)):
+            drops_SMER = []
+            drops_LIME = []
+
             for idx, row in self.df_AOPC.iterrows():
-                original_text = row['Description']
-                word_to_index = {word: i for i, word in enumerate(original_text.split())}
+                description = row['Description']
+                word_to_index = {word: i for i, word in enumerate(description.split())}
 
-                # Calculate original probability
+                # Calculate original probability for both SMER and LIME
                 original_word_indices = [i for word, i in word_to_index.items()]
                 original_embeddings = [np.array(row['Embedding'][i]) for i in original_word_indices]
-                original_aggregated_embedding = np.mean(original_embeddings,
-                                                        axis=0) if original_embeddings else np.zeros(VECTOR_SIZE)
+                original_aggregated_embedding = np.mean(original_embeddings, axis=0) if original_embeddings else np.zeros(VECTOR_SIZE)
                 original_probs = self.logreg_model.predict_proba([original_aggregated_embedding])[0]
-                original_class = np.argmax(original_probs)  # Determine the predicted class
+                original_class = np.argmax(original_probs)
                 original_prob = original_probs[original_class]
 
-                # Initialize text for iterative removal
-                altered_text = original_text
-
-                # Iteratively remove the most important word
+                # --- SMER Calculation ---
+                altered_text_SMER = description
                 for _ in range(K):
                     word_importances = {}
-                    words = altered_text.split()
+                    words_SMER = altered_text_SMER.split()
 
-                    # Calculate importance of each word
-                    for word in words:
-                        # Remove the word and calculate the new probability
-                        temp_text = ' '.join(w for w in words if w != word)
+                    # Calculate importance of each word (SMER)
+                    for word in words_SMER:
+                        temp_text = ' '.join(w for w in words_SMER if w != word)
                         temp_word_indices = [word_to_index[w] for w in temp_text.split() if w in word_to_index]
                         temp_embeddings = [np.array(row['Embedding'][i]) for i in temp_word_indices]
-                        temp_aggregated_embedding = np.mean(temp_embeddings, axis=0) if temp_embeddings else np.zeros(
-                            VECTOR_SIZE)
+                        temp_aggregated_embedding = np.mean(temp_embeddings, axis=0) if temp_embeddings else np.zeros(VECTOR_SIZE)
                         temp_prob = self.logreg_model.predict_proba([temp_aggregated_embedding])[0][original_class]
 
                         # Calculate the drop in probability
                         word_importances[word] = original_prob - temp_prob
-                    print(word_importances)
 
-                    # Find the most important word (with the highest drop in probability)
                     if word_importances:
                         most_important_word = max(word_importances, key=word_importances.get)
+                        altered_text_SMER = ' '.join(w for w in altered_text_SMER.split() if w != most_important_word)
 
-                        # Remove the most important word from the text
-                        altered_text = ' '.join(w for w in altered_text.split() if w != most_important_word)
-
-                        # Recalculate the probability after removing the word
-                        altered_word_indices = [word_to_index[w] for w in altered_text.split() if w in word_to_index]
+                        altered_word_indices = [word_to_index[w] for w in altered_text_SMER.split() if w in word_to_index]
                         altered_embeddings = [np.array(row['Embedding'][i]) for i in altered_word_indices]
-                        altered_aggregated_embedding = np.mean(altered_embeddings,
-                                                               axis=0) if altered_embeddings else np.zeros(VECTOR_SIZE)
-                        altered_prob = self.logreg_model.predict_proba([altered_aggregated_embedding])[0][
-                            original_class]
+                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(VECTOR_SIZE)
+                        altered_prob = self.logreg_model.predict_proba([altered_aggregated_embedding])[0][original_class]
                     else:
                         altered_prob = original_prob
 
-                    # Calculate and store the drop for this iteration
-                    drop = original_prob - altered_prob
-                    drops.append(drop)
+                    # Calculate and store the drop for SMER
+                    drop_SMER = original_prob - altered_prob
+                    drops_SMER.append(drop_SMER)
 
-            avg_drops.append(np.mean(drops))
+                # --- LIME Calculation ---
+                exp = explainer.explain_instance(description, lambda texts: self.logreg_model.predict_proba(
+                    [np.mean([np.array(row['Embedding'][i]) for i in range(len(row['Embedding']))], axis=0)
+                     for text in texts]), num_features=len(description.split()))
 
-        # Plot AOPC results
+                importance_scores = {word: abs(score) for word, score in exp.as_list()}
+                altered_text_LIME = description
+
+                for _ in range(K):
+                    words_LIME = altered_text_LIME.split()
+
+                    # Find and remove the most important word (LIME)
+                    if importance_scores:
+                        most_important_word = max(importance_scores, key=importance_scores.get)
+                        altered_text_LIME = ' '.join(w for w in words_LIME if w != most_important_word)
+
+                        altered_word_indices = [description.split().index(w) for w in altered_text_LIME.split() if w in description.split()]
+                        altered_embeddings = [row['Embedding'][i] for i in altered_word_indices if i < len(row['Embedding'])]
+                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(VECTOR_SIZE)
+                        altered_probs = self.logreg_model.predict_proba([altered_aggregated_embedding])[0]
+                        altered_prob_LIME = altered_probs[original_class]
+
+                        # Remove the word from importance_scores to avoid selecting it again
+                        importance_scores.pop(most_important_word, None)
+                    else:
+                        altered_prob_LIME = original_prob
+
+                    # Calculate and store the drop for LIME
+                    drop_LIME = original_prob - altered_prob_LIME
+                    drops_LIME.append(drop_LIME)
+
+            avg_drops_SMER.append(np.mean(drops_SMER))
+            avg_drops_LIME.append(np.mean(drops_LIME))
+
+        # Plot both SMER and LIME AOPC results
         plt.figure(figsize=(10, 6))
-        plt.plot(range(1, max_K + 1), avg_drops, marker='o')
+        plt.plot(range(1, max_K + 1), avg_drops_SMER, marker='o', label='SMER AOPC')
+        plt.plot(range(1, max_K + 1), avg_drops_LIME, marker='x', label='LIME AOPC')
         plt.xlabel('Number of Words Removed (K)')
         plt.ylabel('Average Output Probability Change (AOPC)')
-        plt.title('AOPC vs. Number of Important Words Removed')
+        plt.title('AOPC vs. Number of Important Words Removed (SMER and LIME)')
+        plt.legend()
         plt.grid(True)
         plt.show()
+
 
     def plot_important_words(self):
         """"""
@@ -397,8 +426,6 @@ class ImageClassifier:
     def _get_bound_boxes_local(self):
         """TODO"""
 
-    def _get_lime_score(self):
-        """TODO"""
     @staticmethod
     def _preprocess_text(text: str) -> str:
         """
