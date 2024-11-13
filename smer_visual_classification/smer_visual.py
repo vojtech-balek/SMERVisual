@@ -18,20 +18,22 @@ import seaborn as sns
 from tqdm import tqdm
 from PIL import Image
 from lime.lime_text import LimeTextExplainer
-
+import requests
 
 class ImageClassifier:
     def __init__(self, openai_model=None, openai_embedding=None, openai_key=None,
-                 local_model_path=None, local_embedding_path=None):
+                 local_model_path=None, local_embedding_path=None, bound_boxes = False):
         """
         Initialize the ImageClassifier with OpenAI API or a local model.
         :param use_openai: Boolean flag to determine whether to use OpenAI API or a local model.
         :param openai_key: API key for OpenAI (required if use_openai is True).
         :param local_model_path: Custom local model object to be used (required if use_openai is False).
         """
+        self.top_10_words = []
         self.df_AOPC = None
         self.logreg_model = None
         self.model_host = "openai" if openai_model else "local"
+        self.embedding_length = 0
         if self.model_host == "openai":
             if not openai_key:
                 raise ValueError("OpenAI key must be provided when using OpenAI API.")
@@ -63,6 +65,7 @@ class ImageClassifier:
         self.data_folder = data
         self.dataset = pd.DataFrame(getattr(self, f"_{self.model_host}_image_description")(),
                                     columns=['Image', 'Description', 'Embedding', 'Label'])
+        self.embedding_length = len(self.dataset['Embedding'].iloc[0])
         self.dataset['Aggregated_embedding'] = self.dataset['Embedding'].apply(self._aggregate_embeddings)
         self.dataset.to_csv('embedded_dataset.csv')
         self.classify_with_logreg()
@@ -110,7 +113,7 @@ class ImageClassifier:
                     response.choices[0].message.content), label
             except Exception as e:
                 print(f'Error: {e}')
-                yield file, None, np.zeros(1536)
+                yield file, None, np.zeros(self.embedding_length)
 
     def _local_image_description(self) -> Union[str, None]:
         """
@@ -168,7 +171,7 @@ class ImageClassifier:
         Generate embeddings for the image's word description using openai.
         :param sentence: Word description of an image.
         :type sentence: str
-        :return: Embedding of length 1536
+        :return: Embedding of appropriate length
         """
         words = sentence.split()
         embeddings = []
@@ -187,18 +190,17 @@ class ImageClassifier:
         if embeddings:
             return embeddings
         else:
-            return np.zeros(1536)  # ADA embedding size is 1536
+            return np.zeros(self.embedding_length)
 
     def _get_local_embeddings(self, sentence: str) -> np.array:
         """
         Generate embeddings for the image's word description.
         :param sentence: Word description of an image.
         :type sentence: str
-        :return: Embedding of length 1536
+        :return: Embedding of appropriate length
         """
         self.bert_tokenizer = AutoTokenizer.from_pretrained(self.local_embedding)
         self.embedding_model = AutoModel.from_pretrained(self.local_embedding)
-
         self.device = torch.device('cpu' if torch.cuda.is_available() else 'cpu')
         self.embedding_model.to(self.device)
         embeddings = []
@@ -288,7 +290,6 @@ class ImageClassifier:
         Plot Average Output Probability Change (AOPC) as a function of iteratively removing important words,
         with calculations for both SMER and LIME explanations within a single loop.
         """
-        VECTOR_SIZE = 1536 if self.model_host == "openai" else 384
         max_K = 6  # Maximum number of top words to remove
         avg_drops_SMER = []
         avg_drops_LIME = []
@@ -305,7 +306,7 @@ class ImageClassifier:
                 # Calculate original probability for both SMER and LIME
                 original_word_indices = [i for word, i in word_to_index.items()]
                 original_embeddings = [np.array(row['Embedding'][i]) for i in original_word_indices]
-                original_aggregated_embedding = np.mean(original_embeddings, axis=0) if original_embeddings else np.zeros(VECTOR_SIZE)
+                original_aggregated_embedding = np.mean(original_embeddings, axis=0) if original_embeddings else np.zeros(self.embedding_length)
                 original_probs = self.logreg_model.predict_proba([original_aggregated_embedding])[0]
                 original_class = np.argmax(original_probs)
                 original_prob = original_probs[original_class]
@@ -321,7 +322,7 @@ class ImageClassifier:
                         temp_text = ' '.join(w for w in words_SMER if w != word)
                         temp_word_indices = [word_to_index[w] for w in temp_text.split() if w in word_to_index]
                         temp_embeddings = [np.array(row['Embedding'][i]) for i in temp_word_indices]
-                        temp_aggregated_embedding = np.mean(temp_embeddings, axis=0) if temp_embeddings else np.zeros(VECTOR_SIZE)
+                        temp_aggregated_embedding = np.mean(temp_embeddings, axis=0) if temp_embeddings else np.zeros(self.embedding_length)
                         temp_prob = self.logreg_model.predict_proba([temp_aggregated_embedding])[0][original_class]
 
                         # Calculate the drop in probability
@@ -333,7 +334,7 @@ class ImageClassifier:
 
                         altered_word_indices = [word_to_index[w] for w in altered_text_SMER.split() if w in word_to_index]
                         altered_embeddings = [np.array(row['Embedding'][i]) for i in altered_word_indices]
-                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(VECTOR_SIZE)
+                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(self.embedding_length)
                         altered_prob = self.logreg_model.predict_proba([altered_aggregated_embedding])[0][original_class]
                     else:
                         altered_prob = original_prob
@@ -360,7 +361,7 @@ class ImageClassifier:
 
                         altered_word_indices = [description.split().index(w) for w in altered_text_LIME.split() if w in description.split()]
                         altered_embeddings = [row['Embedding'][i] for i in altered_word_indices if i < len(row['Embedding'])]
-                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(VECTOR_SIZE)
+                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(self.embedding_length)
                         altered_probs = self.logreg_model.predict_proba([altered_aggregated_embedding])[0]
                         altered_prob_LIME = altered_probs[original_class]
 
@@ -406,11 +407,11 @@ class ImageClassifier:
         importance_word_counts.columns = ['Word', 'Count']
 
         # Get the top 10 most important words
-        top_10_words = importance_word_counts.head(10)
+        self.top_10_words = importance_word_counts.head(10)
 
         # Plotting the top 10 results
         plt.figure(figsize=(12, 8))
-        sns.barplot(data=top_10_words, x='Word', y='Count', palette='viridis', hue='Count')
+        sns.barplot(data=self.top_10_words, x='Word', y='Count', palette='viridis', hue='Count')
         plt.title('Top 10 Most Important Words Across Images')
         plt.xlabel('Word')
         plt.ylabel('Count')
@@ -422,6 +423,35 @@ class ImageClassifier:
 
     def _get_bound_boxes_openai(self):
         """TODO"""
+        self.client = OpenAI(api_key=self.open_ai_key)
+
+        for file, label in self._get_image_files_with_class(self.data_folder):
+            try:
+                # Generate an image from the OpenAI API using a prompt
+                response = self.client.images.edit(
+                    prompt=f"Create a bright red bounding box around one of these items, if they are present in the image: {self.top_10_words}",
+                    n=1,  # Specify the number of images to generate
+                    size="1024x1024",
+                    image=open(file, 'rb')
+                    # Define the resolution of the generated image
+                )
+
+                # Extract the generated image URL
+                image_url = response['data'][0]['url']
+                image_data = requests.get(image_url).content
+
+                if not os.path.exists('smer_bounding_boxes'):
+                    os.makedirs('smer_bounding_boxes')
+                if not os.path.exists(f'smer_bounding_boxes/{label}'):
+                    os.makedirs(f'smer_bounding_boxes/{label}')
+
+
+                # Save the image
+                with open(f'{file}', 'wb') as img_file:
+                    img_file.write(image_data)
+
+            except Exception as e:
+                print(f'Error: {e}')
 
     def _get_bound_boxes_local(self):
         """TODO"""
