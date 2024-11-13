@@ -20,9 +20,9 @@ from PIL import Image
 from lime.lime_text import LimeTextExplainer
 import requests
 
-class ImageClassifier:
+class VisualExplainer:
     def __init__(self, openai_model=None, openai_embedding=None, openai_key=None,
-                 local_model_path=None, local_embedding_path=None, bound_boxes = False):
+                 local_model_path=None, local_embedding_path=None):
         """
         Initialize the ImageClassifier with OpenAI API or a local model.
         :param use_openai: Boolean flag to determine whether to use OpenAI API or a local model.
@@ -39,8 +39,8 @@ class ImageClassifier:
                 raise ValueError("OpenAI key must be provided when using OpenAI API.")
             if not openai_model:
                 raise ValueError("OpenAI model must be provided when using OpenAI API.")
-            self.open_ai_key = openai_key
-            self.open_ai_model = openai_model
+            self.openai_key = openai_key
+            self.openai_model = openai_model
             self.openai_embedding = openai_embedding
 
         else:
@@ -80,13 +80,13 @@ class ImageClassifier:
         :type prompt: str
         :return: Text description of the image if no exception occurs, None otherwise
         """
-        self.client = OpenAI(api_key=self.open_ai_key)
+        self.client = OpenAI(api_key=self.openai_key)
 
         for file, label in self._get_image_files_with_class(self.data_folder):
             encoded_image = self._encode_image(file)
             try:
                 response = self.client.chat.completions.create(
-                    model=self.open_ai_model,
+                    model=self.openai_model,
                     messages=[
                         {
                             "role": "user",
@@ -421,38 +421,6 @@ class ImageClassifier:
         # Show plot
         plt.show()
 
-    def _get_bound_boxes_openai(self):
-        """TODO"""
-        self.client = OpenAI(api_key=self.open_ai_key)
-
-        for file, label in self._get_image_files_with_class(self.data_folder):
-            try:
-                # Generate an image from the OpenAI API using a prompt
-                response = self.client.images.edit(
-                    prompt=f"Create a bright red bounding box around one of these items, if they are present in the image: {self.top_10_words}",
-                    n=1,  # Specify the number of images to generate
-                    size="1024x1024",
-                    image=open(file, 'rb')
-                    # Define the resolution of the generated image
-                )
-
-                # Extract the generated image URL
-                image_url = response['data'][0]['url']
-                image_data = requests.get(image_url).content
-
-                if not os.path.exists('smer_bounding_boxes'):
-                    os.makedirs('smer_bounding_boxes')
-                if not os.path.exists(f'smer_bounding_boxes/{label}'):
-                    os.makedirs(f'smer_bounding_boxes/{label}')
-
-
-                # Save the image
-                with open(f'{file}', 'wb') as img_file:
-                    img_file.write(image_data)
-
-            except Exception as e:
-                print(f'Error: {e}')
-
     def _get_bound_boxes_local(self):
         """TODO"""
 
@@ -510,6 +478,61 @@ class ImageClassifier:
         """Load images with labels based on their parent directory name.
         :param folder_path: path to directory subfolders with images
         :type folder_path: str
+        """
+        valid_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff')
+        for root, dirs, files in os.walk(folder_path):
+            for file in files:
+                if file.lower().endswith(valid_extensions) and '.ipynb_checkpoints' not in root:
+                    image_path = os.path.join(root, file)
+                    class_name = os.path.basename(root)
+
+                    yield image_path, class_name
+
+
+class BoundingBoxGenerator:
+    def __init__(self, data = Union[str, PathLike], top_words = list, openai_key = str):
+        self.data_folder = data
+        self.top_words = top_words
+        self.openai_key = openai_key
+
+    def _get_bounding_boxes_openai(self):
+        """TODO"""
+        self.client = OpenAI(api_key=self.openai_key)
+
+        for file, label in self._get_image_files_with_class(self.data_folder):
+            try:
+                # Generate an image from the OpenAI API using a prompt
+                response = self.client.images.edit(
+                    prompt=f"Create a bright red bounding box around one of these items, if they are present in the image: {self.top_10_words}",
+                    n=1,  # Specify the number of images to generate
+                    size="1024x1024",
+                    image=open(file, 'rb')
+                    # Define the resolution of the generated image
+                )
+
+                # Extract the generated image URL
+                image_url = response['data'][0]['url']
+                image_data = requests.get(image_url).content
+
+                if not os.path.exists('smer_bounding_boxes'):
+                    os.makedirs('smer_bounding_boxes')
+                if not os.path.exists(f'smer_bounding_boxes/{label}'):
+                    os.makedirs(f'smer_bounding_boxes/{label}')
+
+
+                # Save the image
+                with open(f'{file}', 'wb') as img_file:
+                    img_file.write(image_data)
+
+            except Exception as e:
+                print(f'Error: {e}')
+
+
+    @staticmethod
+    def _get_image_files_with_class(folder_path):
+        """Load images with labels based on their parent directory name.
+        :param folder_path: path to directory subfolders with images
+        :type folder_path: str or PathLike
         """
         valid_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff')
         for root, dirs, files in os.walk(folder_path):
