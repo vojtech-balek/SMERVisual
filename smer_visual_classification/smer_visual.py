@@ -22,7 +22,7 @@ from lime.lime_text import LimeTextExplainer
 
 class ImageClassifier:
     def __init__(self, openai_model=None, openai_embedding=None, openai_key=None,
-                 local_model_path=None, local_embedding_path=None):
+                 local_model_path=None, local_embedding_path=None, bound_boxes = False):
         """
         Initialize the ImageClassifier with OpenAI API or a local model.
         :param use_openai: Boolean flag to determine whether to use OpenAI API or a local model.
@@ -112,7 +112,7 @@ class ImageClassifier:
                     response.choices[0].message.content), label
             except Exception as e:
                 print(f'Error: {e}')
-                yield file, None, np.zeros(1536)
+                yield file, None, np.zeros(self.embedding_length)
 
     def _local_image_description(self) -> Union[str, None]:
         """
@@ -170,7 +170,7 @@ class ImageClassifier:
         Generate embeddings for the image's word description using openai.
         :param sentence: Word description of an image.
         :type sentence: str
-        :return: Embedding of length 1536
+        :return: Embedding of appropriate length
         """
         words = sentence.split()
         embeddings = []
@@ -189,14 +189,14 @@ class ImageClassifier:
         if embeddings:
             return embeddings
         else:
-            return np.zeros(1536)  # ADA embedding size is 1536
+            return np.zeros(self.embedding_length)
 
     def _get_local_embeddings(self, sentence: str) -> np.array:
         """
         Generate embeddings for the image's word description.
         :param sentence: Word description of an image.
         :type sentence: str
-        :return: Embedding of length 1536
+        :return: Embedding of appropriate length
         """
         self.bert_tokenizer = AutoTokenizer.from_pretrained(self.local_embedding)
         self.embedding_model = AutoModel.from_pretrained(self.local_embedding)
