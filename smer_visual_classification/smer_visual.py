@@ -18,7 +18,7 @@ import seaborn as sns
 from tqdm import tqdm
 from PIL import Image
 from lime.lime_text import LimeTextExplainer
-
+import requests
 
 class ImageClassifier:
     def __init__(self, openai_model=None, openai_embedding=None, openai_key=None,
@@ -29,6 +29,7 @@ class ImageClassifier:
         :param openai_key: API key for OpenAI (required if use_openai is True).
         :param local_model_path: Custom local model object to be used (required if use_openai is False).
         """
+        self.top_10_words = []
         self.df_AOPC = None
         self.logreg_model = None
         self.model_host = "openai" if openai_model else "local"
@@ -406,11 +407,11 @@ class ImageClassifier:
         importance_word_counts.columns = ['Word', 'Count']
 
         # Get the top 10 most important words
-        top_10_words = importance_word_counts.head(10)
+        self.top_10_words = importance_word_counts.head(10)
 
         # Plotting the top 10 results
         plt.figure(figsize=(12, 8))
-        sns.barplot(data=top_10_words, x='Word', y='Count', palette='viridis', hue='Count')
+        sns.barplot(data=self.top_10_words, x='Word', y='Count', palette='viridis', hue='Count')
         plt.title('Top 10 Most Important Words Across Images')
         plt.xlabel('Word')
         plt.ylabel('Count')
@@ -422,6 +423,35 @@ class ImageClassifier:
 
     def _get_bound_boxes_openai(self):
         """TODO"""
+        self.client = OpenAI(api_key=self.open_ai_key)
+
+        for file, label in self._get_image_files_with_class(self.data_folder):
+            try:
+                # Generate an image from the OpenAI API using a prompt
+                response = self.client.images.edit(
+                    prompt=f"Create a bright red bounding box around one of these items, if they are present in the image: {self.top_10_words}",
+                    n=1,  # Specify the number of images to generate
+                    size="1024x1024",
+                    image=open(file, 'rb')
+                    # Define the resolution of the generated image
+                )
+
+                # Extract the generated image URL
+                image_url = response['data'][0]['url']
+                image_data = requests.get(image_url).content
+
+                if not os.path.exists('smer_bounding_boxes'):
+                    os.makedirs('smer_bounding_boxes')
+                if not os.path.exists(f'smer_bounding_boxes/{label}'):
+                    os.makedirs(f'smer_bounding_boxes/{label}')
+
+
+                # Save the image
+                with open(f'{file}', 'wb') as img_file:
+                    img_file.write(image_data)
+
+            except Exception as e:
+                print(f'Error: {e}')
 
     def _get_bound_boxes_local(self):
         """TODO"""
