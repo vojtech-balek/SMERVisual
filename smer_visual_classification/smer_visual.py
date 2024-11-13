@@ -32,6 +32,7 @@ class ImageClassifier:
         self.df_AOPC = None
         self.logreg_model = None
         self.model_host = "openai" if openai_model else "local"
+        self.embedding_length = 0
         if self.model_host == "openai":
             if not openai_key:
                 raise ValueError("OpenAI key must be provided when using OpenAI API.")
@@ -63,6 +64,7 @@ class ImageClassifier:
         self.data_folder = data
         self.dataset = pd.DataFrame(getattr(self, f"_{self.model_host}_image_description")(),
                                     columns=['Image', 'Description', 'Embedding', 'Label'])
+        self.embedding_length = len(self.dataset['Embedding'].iloc[0])
         self.dataset['Aggregated_embedding'] = self.dataset['Embedding'].apply(self._aggregate_embeddings)
         self.dataset.to_csv('embedded_dataset.csv')
         self.classify_with_logreg()
@@ -198,7 +200,7 @@ class ImageClassifier:
         """
         self.bert_tokenizer = AutoTokenizer.from_pretrained(self.local_embedding)
         self.embedding_model = AutoModel.from_pretrained(self.local_embedding)
-
+        self.embedding_length = self.embedding_model.config.hidden_size
         self.device = torch.device('cpu' if torch.cuda.is_available() else 'cpu')
         self.embedding_model.to(self.device)
         embeddings = []
@@ -288,7 +290,6 @@ class ImageClassifier:
         Plot Average Output Probability Change (AOPC) as a function of iteratively removing important words,
         with calculations for both SMER and LIME explanations within a single loop.
         """
-        VECTOR_SIZE = 1536 if self.model_host == "openai" else 384
         max_K = 6  # Maximum number of top words to remove
         avg_drops_SMER = []
         avg_drops_LIME = []
@@ -305,7 +306,7 @@ class ImageClassifier:
                 # Calculate original probability for both SMER and LIME
                 original_word_indices = [i for word, i in word_to_index.items()]
                 original_embeddings = [np.array(row['Embedding'][i]) for i in original_word_indices]
-                original_aggregated_embedding = np.mean(original_embeddings, axis=0) if original_embeddings else np.zeros(VECTOR_SIZE)
+                original_aggregated_embedding = np.mean(original_embeddings, axis=0) if original_embeddings else np.zeros(self.embedding_length)
                 original_probs = self.logreg_model.predict_proba([original_aggregated_embedding])[0]
                 original_class = np.argmax(original_probs)
                 original_prob = original_probs[original_class]
@@ -321,7 +322,7 @@ class ImageClassifier:
                         temp_text = ' '.join(w for w in words_SMER if w != word)
                         temp_word_indices = [word_to_index[w] for w in temp_text.split() if w in word_to_index]
                         temp_embeddings = [np.array(row['Embedding'][i]) for i in temp_word_indices]
-                        temp_aggregated_embedding = np.mean(temp_embeddings, axis=0) if temp_embeddings else np.zeros(VECTOR_SIZE)
+                        temp_aggregated_embedding = np.mean(temp_embeddings, axis=0) if temp_embeddings else np.zeros(self.embedding_length)
                         temp_prob = self.logreg_model.predict_proba([temp_aggregated_embedding])[0][original_class]
 
                         # Calculate the drop in probability
@@ -333,7 +334,7 @@ class ImageClassifier:
 
                         altered_word_indices = [word_to_index[w] for w in altered_text_SMER.split() if w in word_to_index]
                         altered_embeddings = [np.array(row['Embedding'][i]) for i in altered_word_indices]
-                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(VECTOR_SIZE)
+                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(self.embedding_length)
                         altered_prob = self.logreg_model.predict_proba([altered_aggregated_embedding])[0][original_class]
                     else:
                         altered_prob = original_prob
@@ -360,7 +361,7 @@ class ImageClassifier:
 
                         altered_word_indices = [description.split().index(w) for w in altered_text_LIME.split() if w in description.split()]
                         altered_embeddings = [row['Embedding'][i] for i in altered_word_indices if i < len(row['Embedding'])]
-                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(VECTOR_SIZE)
+                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(self.embedding_length)
                         altered_probs = self.logreg_model.predict_proba([altered_aggregated_embedding])[0]
                         altered_prob_LIME = altered_probs[original_class]
 
