@@ -200,7 +200,6 @@ class ImageClassifier:
         """
         self.bert_tokenizer = AutoTokenizer.from_pretrained(self.local_embedding)
         self.embedding_model = AutoModel.from_pretrained(self.local_embedding)
-        self.embedding_length = self.embedding_model.config.hidden_size
         self.device = torch.device('cpu' if torch.cuda.is_available() else 'cpu')
         self.embedding_model.to(self.device)
         embeddings = []
