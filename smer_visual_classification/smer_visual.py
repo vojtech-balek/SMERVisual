@@ -19,6 +19,9 @@ from tqdm import tqdm
 from PIL import Image
 from lime.lime_text import LimeTextExplainer
 import requests
+from io import BytesIO
+from PIL import Image
+
 
 class VisualExplainer:
     def __init__(self, openai_model=None, openai_embedding=None, openai_key=None,
@@ -490,28 +493,37 @@ class VisualExplainer:
 
 
 class BoundingBoxGenerator:
-    def __init__(self, data = Union[str, PathLike], top_words = list, openai_key = str):
+    def __init__(self, data = Union[str, PathLike], top_words = list, openai_key = str, openai_model = str):
         self.data_folder = data
         self.top_words = top_words
         self.openai_key = openai_key
+        self.openai_model = openai_model
 
-    def _get_bounding_boxes_openai(self):
-        """TODO"""
-        self.client = OpenAI(api_key=self.openai_key)
+    def get_bounding_boxes_openai(self):
+        """
+
+        :return:
+        """
+        self.client = OpenAI(api_key = self.openai_key)
 
         for file, label in self._get_image_files_with_class(self.data_folder):
             try:
+                png_buffer = self._convert_to_png(file)
                 # Generate an image from the OpenAI API using a prompt
                 response = self.client.images.edit(
-                    prompt=f"Create a bright red bounding box around one of these items, if they are present in the image: {self.top_10_words}",
+                    prompt=f"Create a bright red bounding box around one of these items, if they are present in the image: {self.top_words}",
                     n=1,  # Specify the number of images to generate
                     size="1024x1024",
-                    image=open(file, 'rb')
+                    image=png_buffer
                     # Define the resolution of the generated image
                 )
 
                 # Extract the generated image URL
-                image_url = response['data'][0]['url']
+                print(type(response))
+                print(response)
+                image_url = response.data[0].url
+                print(type(image_url))
+                print(image_url)
                 image_data = requests.get(image_url).content
 
                 if not os.path.exists('smer_bounding_boxes'):
@@ -526,6 +538,44 @@ class BoundingBoxGenerator:
 
             except Exception as e:
                 print(f'Error: {e}')
+
+    @staticmethod
+    def _convert_to_png(file_path):
+        """
+        Convert an image to PNG format in memory.
+        :param file_path: Path to the image file
+        :return: BytesIO object containing the PNG image data
+        """
+        with Image.open(file_path) as img:
+            png_buffer = BytesIO()
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+            img.save(png_buffer, format="PNG")
+            png_buffer.seek(0)  # Reset buffer pointer to the beginning
+        return png_buffer
+
+    @staticmethod
+    def create_blank_mask(source_image_path, output_path):
+        """
+        Creates a blank (transparent) PNG file with the same size as the source image.
+
+        :param source_image_path: Path to the source image to get dimensions.
+        :param output_path: Path where the blank PNG mask will be saved.
+        """
+        try:
+            # Open the source image to get its dimensions
+            with Image.open(source_image_path) as source_image:
+                width, height = source_image.size
+
+            # Create a new blank image with RGBA mode (transparent)
+            blank_image = Image.new("RGBA", (width, height), (0, 0, 0, 0))  # Fully transparent
+
+            # Save the blank image as a PNG file
+            blank_image.save(output_path, format="PNG")
+            print(f"Blank mask saved at: {output_path}")
+
+        except Exception as e:
+            print(f"Error creating blank mask: {e}")
 
 
     @staticmethod
