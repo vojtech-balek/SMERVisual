@@ -16,14 +16,13 @@ import spacy
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
-from PIL import Image
 from lime.lime_text import LimeTextExplainer
-import requests
-from io import BytesIO
 from PIL import Image
+import ast
+import cv2
 
 
-class VisualExplainer:
+class ImageClassifier:
     def __init__(self, openai_model=None, openai_embedding=None, openai_key=None,
                  local_model_path=None, local_embedding_path=None):
         """
@@ -32,18 +31,17 @@ class VisualExplainer:
         :param openai_key: API key for OpenAI (required if use_openai is True).
         :param local_model_path: Custom local model object to be used (required if use_openai is False).
         """
-        self.top_10_words = []
         self.df_AOPC = None
+        self.top_10_words = []
         self.logreg_model = None
         self.model_host = "openai" if openai_model else "local"
-        self.embedding_length = 0
         if self.model_host == "openai":
             if not openai_key:
                 raise ValueError("OpenAI key must be provided when using OpenAI API.")
             if not openai_model:
                 raise ValueError("OpenAI model must be provided when using OpenAI API.")
-            self.openai_key = openai_key
-            self.openai_model = openai_model
+            self.open_ai_key = openai_key
+            self.open_ai_model = openai_model
             self.openai_embedding = openai_embedding
 
         else:
@@ -68,7 +66,6 @@ class VisualExplainer:
         self.data_folder = data
         self.dataset = pd.DataFrame(getattr(self, f"_{self.model_host}_image_description")(),
                                     columns=['Image', 'Description', 'Embedding', 'Label'])
-        self.embedding_length = len(self.dataset['Embedding'].iloc[0])
         self.dataset['Aggregated_embedding'] = self.dataset['Embedding'].apply(self._aggregate_embeddings)
         self.dataset.to_csv('embedded_dataset.csv')
         self.classify_with_logreg()
@@ -83,13 +80,13 @@ class VisualExplainer:
         :type prompt: str
         :return: Text description of the image if no exception occurs, None otherwise
         """
-        self.client = OpenAI(api_key=self.openai_key)
+        self.client = OpenAI(api_key=self.open_ai_key)
 
         for file, label in self._get_image_files_with_class(self.data_folder):
             encoded_image = self._encode_image(file)
             try:
                 response = self.client.chat.completions.create(
-                    model=self.openai_model,
+                    model=self.open_ai_model,
                     messages=[
                         {
                             "role": "user",
@@ -116,7 +113,7 @@ class VisualExplainer:
                     response.choices[0].message.content), label
             except Exception as e:
                 print(f'Error: {e}')
-                yield file, None, np.zeros(self.embedding_length)
+                yield file, None, np.zeros(1536)
 
     def _local_image_description(self) -> Union[str, None]:
         """
@@ -174,7 +171,7 @@ class VisualExplainer:
         Generate embeddings for the image's word description using openai.
         :param sentence: Word description of an image.
         :type sentence: str
-        :return: Embedding of appropriate length
+        :return: Embedding of length 1536
         """
         words = sentence.split()
         embeddings = []
@@ -193,17 +190,18 @@ class VisualExplainer:
         if embeddings:
             return embeddings
         else:
-            return np.zeros(self.embedding_length)
+            return np.zeros(1536)  # ADA embedding size is 1536
 
     def _get_local_embeddings(self, sentence: str) -> np.array:
         """
         Generate embeddings for the image's word description.
         :param sentence: Word description of an image.
         :type sentence: str
-        :return: Embedding of appropriate length
+        :return: Embedding of length 1536
         """
         self.bert_tokenizer = AutoTokenizer.from_pretrained(self.local_embedding)
         self.embedding_model = AutoModel.from_pretrained(self.local_embedding)
+
         self.device = torch.device('cpu' if torch.cuda.is_available() else 'cpu')
         self.embedding_model.to(self.device)
         embeddings = []
@@ -293,6 +291,7 @@ class VisualExplainer:
         Plot Average Output Probability Change (AOPC) as a function of iteratively removing important words,
         with calculations for both SMER and LIME explanations within a single loop.
         """
+        VECTOR_SIZE = 1536 if self.model_host == "openai" else 384
         max_K = 6  # Maximum number of top words to remove
         avg_drops_SMER = []
         avg_drops_LIME = []
@@ -309,7 +308,7 @@ class VisualExplainer:
                 # Calculate original probability for both SMER and LIME
                 original_word_indices = [i for word, i in word_to_index.items()]
                 original_embeddings = [np.array(row['Embedding'][i]) for i in original_word_indices]
-                original_aggregated_embedding = np.mean(original_embeddings, axis=0) if original_embeddings else np.zeros(self.embedding_length)
+                original_aggregated_embedding = np.mean(original_embeddings, axis=0) if original_embeddings else np.zeros(VECTOR_SIZE)
                 original_probs = self.logreg_model.predict_proba([original_aggregated_embedding])[0]
                 original_class = np.argmax(original_probs)
                 original_prob = original_probs[original_class]
@@ -325,7 +324,7 @@ class VisualExplainer:
                         temp_text = ' '.join(w for w in words_SMER if w != word)
                         temp_word_indices = [word_to_index[w] for w in temp_text.split() if w in word_to_index]
                         temp_embeddings = [np.array(row['Embedding'][i]) for i in temp_word_indices]
-                        temp_aggregated_embedding = np.mean(temp_embeddings, axis=0) if temp_embeddings else np.zeros(self.embedding_length)
+                        temp_aggregated_embedding = np.mean(temp_embeddings, axis=0) if temp_embeddings else np.zeros(VECTOR_SIZE)
                         temp_prob = self.logreg_model.predict_proba([temp_aggregated_embedding])[0][original_class]
 
                         # Calculate the drop in probability
@@ -337,7 +336,7 @@ class VisualExplainer:
 
                         altered_word_indices = [word_to_index[w] for w in altered_text_SMER.split() if w in word_to_index]
                         altered_embeddings = [np.array(row['Embedding'][i]) for i in altered_word_indices]
-                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(self.embedding_length)
+                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(VECTOR_SIZE)
                         altered_prob = self.logreg_model.predict_proba([altered_aggregated_embedding])[0][original_class]
                     else:
                         altered_prob = original_prob
@@ -364,7 +363,7 @@ class VisualExplainer:
 
                         altered_word_indices = [description.split().index(w) for w in altered_text_LIME.split() if w in description.split()]
                         altered_embeddings = [row['Embedding'][i] for i in altered_word_indices if i < len(row['Embedding'])]
-                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(self.embedding_length)
+                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(VECTOR_SIZE)
                         altered_probs = self.logreg_model.predict_proba([altered_aggregated_embedding])[0]
                         altered_prob_LIME = altered_probs[original_class]
 
@@ -410,11 +409,12 @@ class VisualExplainer:
         importance_word_counts.columns = ['Word', 'Count']
 
         # Get the top 10 most important words
-        self.top_10_words = importance_word_counts.head(10)
+        top_10_words = importance_word_counts.head(10)
+        self.top_10_words = top_10_words
 
         # Plotting the top 10 results
         plt.figure(figsize=(12, 8))
-        sns.barplot(data=self.top_10_words, x='Word', y='Count', palette='viridis', hue='Count')
+        sns.barplot(data=top_10_words, x='Word', y='Count', palette='viridis', hue='Count')
         plt.title('Top 10 Most Important Words Across Images')
         plt.xlabel('Word')
         plt.ylabel('Count')
@@ -423,6 +423,9 @@ class VisualExplainer:
 
         # Show plot
         plt.show()
+
+    def _get_bound_boxes_openai(self):
+        """TODO"""
 
     def _get_bound_boxes_local(self):
         """TODO"""
@@ -491,92 +494,108 @@ class VisualExplainer:
 
                     yield image_path, class_name
 
+    def get_top_words(self):
+        return self.top_10_words["Word"].tolist()
+
 
 class BoundingBoxGenerator:
-    def __init__(self, data = Union[str, PathLike], top_words = list, openai_key = str, openai_model = str):
+    def __init__(self, data = Union[str, PathLike], top_words = list, openai_key = Union[str, None], openai_model = Union[str, None]):
         self.data_folder = data
         self.top_words = top_words
         self.openai_key = openai_key
         self.openai_model = openai_model
 
-    def get_bounding_boxes_openai(self):
-        """
-
-        :return:
-        """
-        self.client = OpenAI(api_key = self.openai_key)
-
+    def __call__(self):
         for file, label in self._get_image_files_with_class(self.data_folder):
-            try:
-                png_buffer = self._convert_to_png(file)
-                # Generate an image from the OpenAI API using a prompt
-                response = self.client.images.edit(
-                    prompt=f"Create a bright red bounding box around one of these items, if they are present in the image: {self.top_words}",
-                    n=1,  # Specify the number of images to generate
-                    size="1024x1024",
-                    image=png_buffer
-                    # Define the resolution of the generated image
-                )
-
-                # Extract the generated image URL
-                print(type(response))
-                print(response)
-                image_url = response.data[0].url
-                print(type(image_url))
-                print(image_url)
-                image_data = requests.get(image_url).content
-
-                if not os.path.exists('smer_bounding_boxes'):
-                    os.makedirs('smer_bounding_boxes')
-                if not os.path.exists(f'smer_bounding_boxes/{label}'):
-                    os.makedirs(f'smer_bounding_boxes/{label}')
-
-
-                # Save the image
-                with open(f'{file}', 'wb') as img_file:
-                    img_file.write(image_data)
-
-            except Exception as e:
-                print(f'Error: {e}')
+            bounding_box_coordinates = self._get_bounding_boxes_openai(self, file)
+            self._save_image_with_bounding_box(file, label, bounding_box_coordinates)
 
     @staticmethod
-    def _convert_to_png(file_path):
+    def _get_bounding_boxes_openai(self, file):
         """
-        Convert an image to PNG format in memory.
-        :param file_path: Path to the image file
-        :return: BytesIO object containing the PNG image data
+        Retrieve bounding box coordinates from an image using OpenAI API.
+        :param file: Path to the image file.
+        :type file: str
+        :return: Bounding box coordinates in the format (x_min, y_min, x_max, y_max) or None if an error occurs.
+        :rtype: tuple or None
         """
-        with Image.open(file_path) as img:
-            png_buffer = BytesIO()
-            if img.mode != 'RGBA':
-                img = img.convert('RGBA')
-            img.save(png_buffer, format="PNG")
-            png_buffer.seek(0)  # Reset buffer pointer to the beginning
-        return png_buffer
 
-    @staticmethod
-    def create_blank_mask(source_image_path, output_path):
-        """
-        Creates a blank (transparent) PNG file with the same size as the source image.
+        self.client = OpenAI(api_key=self.openai_key)
 
-        :param source_image_path: Path to the source image to get dimensions.
-        :param output_path: Path where the blank PNG mask will be saved.
-        """
+        with open(file, "rb") as img_file:
+            encoded_image = base64.b64encode(img_file.read()).decode('utf-8')
         try:
-            # Open the source image to get its dimensions
-            with Image.open(source_image_path) as source_image:
-                width, height = source_image.size
-
-            # Create a new blank image with RGBA mode (transparent)
-            blank_image = Image.new("RGBA", (width, height), (0, 0, 0, 0))  # Fully transparent
-
-            # Save the blank image as a PNG file
-            blank_image.save(output_path, format="PNG")
-            print(f"Blank mask saved at: {output_path}")
-
+            response = self.client.chat.completions.create(
+                model=self.openai_model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Give me just one bounding box coordinates for the object most likely to be in the image from this list '{self.top_words}' ""in this image in the format: (x_min, y_min, x_max, y_max), where all values are integers without any words or letters."
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{encoded_image}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=80
+            )
+            bounding_box_text = response.choices[0].message.content.strip()
+            print(bounding_box_text)
+            bounding_box = ast.literal_eval(bounding_box_text)
+            if isinstance(bounding_box, tuple) and len(bounding_box) == 4:
+                return bounding_box
+            else:
+                raise ValueError("Invalid bounding box format")
         except Exception as e:
-            print(f"Error creating blank mask: {e}")
+            print(f"Error: {e}")
+            return None
 
+    def visualize_bounding_box(image_path, bounding_box):
+        """
+        Visualize a bounding box on an image.
+        :param image_path: The file path to the image to be visualized.
+        :type image_path: str
+        :param bounding_box: A tuple containing bounding box coordinates in the format (x_min, y_min, x_max, y_max).
+        :type bounding_box: tuple
+        """
+
+        image = cv2.imread(image_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        if bounding_box:
+            x_min, y_min, x_max, y_max = bounding_box
+            cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (255, 0, 0), 2)
+            plt.imshow(image)
+            plt.axis("off")
+            plt.show()
+        else:
+            print("No bounding box to visualize.")
+
+    def _save_image_with_bounding_box(self, image_path,  label, bounding_box):
+        """
+        Saves an image with a bounding box in the folder structure `smer_bounding_boxes/{label}`.
+
+        :param image_path: Path to the original image.
+        :param bounding_box: Tuple (x_min, y_min, x_max, y_max) defining the bounding box.
+        :param label:
+        """
+        image = cv2.imread(image_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        if bounding_box:
+            x_min, y_min, x_max, y_max = bounding_box
+            cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (255, 0, 0), 2)
+            output_folder = os.path.join("smer_bounding_boxes", label)
+            os.makedirs(output_folder, exist_ok=True)
+            output_path = os.path.join(output_folder, os.path.basename(image_path))
+            cv2.imwrite(output_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+        else:
+            print("No bounding box to visualize.")
 
     @staticmethod
     def _get_image_files_with_class(folder_path):
