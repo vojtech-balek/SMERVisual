@@ -1,3 +1,4 @@
+from pathlib import Path
 from tkinter import Image
 import pandas as pd
 import base64
@@ -20,6 +21,8 @@ from lime.lime_text import LimeTextExplainer
 from PIL import Image
 import ast
 import cv2
+from typing import Union, Optional, List
+from os import PathLike
 
 
 class ImageClassifier:
@@ -127,7 +130,7 @@ class ImageClassifier:
                 encoded_image = Image.open(file)
                 message = [
                     {
-                        "role": "system",
+                        "role": "user", #menim veci
                         "content": [
                             {"type": "text", "text": self.system_prompt}]
                     },
@@ -499,19 +502,113 @@ class ImageClassifier:
 
 
 class BoundingBoxGenerator:
-    def __init__(self, data = Union[str, PathLike], top_words = list, openai_key = Union[str, None], openai_model = Union[str, None]):
-        self.data_folder = data
+    def __init__(self,
+             data: Union[str, Path],
+             top_words: List[str],
+             openai_key: Optional[str] = None,
+             openai_model: Optional[str] = None,
+             local_model_path: Optional[str] = None):
+        self.data_folder = Path(data)
         self.top_words = top_words
-        self.openai_key = openai_key
-        self.openai_model = openai_model
+
+        self.model_host = "openai" if openai_model else "local"
+        if(self.model_host == "openai"):
+            if not openai_key:
+                raise ValueError("OpenAI key must be provided when using OpenAI API.")
+            if not openai_model:
+                raise ValueError("OpenAI model must be provided when using OpenAI API.")
+
+            self.openai_key = openai_key
+            self.openai_model = openai_model
+            self.client = OpenAI(api_key=self.openai_key)
+        else:
+            if not local_model_path:
+                raise ValueError("Local model must be provided when not using OpenAI API.")
+
+            self.tokenizer = AutoTokenizer.from_pretrained(local_model_path)
+            self.model = MllamaForConditionalGeneration.from_pretrained(
+                local_model_path,
+                torch_dtype=torch.bfloat16,
+                device_map="auto",
+            )
+            self.processor = AutoProcessor.from_pretrained(local_model_path)
 
     def __call__(self):
-        for file, label in self._get_image_files_with_class(self.data_folder):
-            bounding_box_coordinates = self._get_bounding_boxes_openai(self, file)
-            self._save_image_with_bounding_box(file, label, bounding_box_coordinates)
+        for file_path, label in self._get_image_files_with_class(self.data_folder):
+            if self.model_host == "openai":
+                bounding_box = self._get_bounding_boxes_openai(file_path)
+            else:
+                bounding_box = self._get_bounding_boxes_local(file_path)
 
-    @staticmethod
-    def _get_bounding_boxes_openai(self, file):
+            self._save_image_with_bounding_box(file_path, label, bounding_box)
+
+    def _get_bounding_boxes_local(self, file_path: str):
+        """
+        Retrieve bounding box coordinates from an image using local model.
+        :param file: Path to the image file.
+        :type file: str
+        :return: Bounding box coordinates in the format (x_min, y_min, x_max, y_max) or None if an error occurs.
+        :rtype: tuple or None
+        """
+
+        try:
+            with open(file_path, "rb") as img_file:
+                encoded_image = base64.b64encode(img_file.read()).decode('utf-8')
+
+            image = Image.open(file_path).convert("RGB")
+            prompt = (
+                f"Provide bounding box coords for the object from {self.top_words}.\n"
+                "Format: x_min, y_min, x_max, y_max with integers only."
+            )
+
+            message = [
+                {
+                    "role": "user",
+                     "content": [
+                         {"type": "text", "text": prompt},
+                         {"type": "image", "data": encoded_image},
+                    ]
+                }
+            ]
+            input_text = self.processor.apply_chat_template(message, add_generation_prompt=True)
+            inputs = self.processor(
+                image,
+                input_text,
+                add_special_tokens=False,
+                return_tensors="pt"
+            ).to(self.model.device)
+
+            output = self.model.generate(**inputs, max_new_tokens=80)
+            decoded_output = self.tokenizer.decode(output[0], skip_special_tokens=True).strip()
+            print(f"Raw bounding box response: '{decoded_output}'")  # Debug statement
+
+
+            match = re.search(r'(\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+)', decoded_output)
+            if match:
+                bounding_box_text = match.group(1)
+                print(f"Extracted bounding box text: '{bounding_box_text}'")  # Debug statement
+
+                parts = bounding_box_text.split(',')
+                if len(parts) != 4:
+                    raise ValueError("Expected four comma-separated values for bounding box.")
+
+                bounding_box = tuple(int(part.strip()) for part in parts)
+                print(f"Parsed bounding box: {bounding_box}")  # Debug statement
+
+                return bounding_box
+            else:
+                raise ValueError("No valid bounding box pattern found in the response.")
+
+        except ValueError as ve:
+            print(f"ValueError while parsing bounding box: {ve}")
+            print(f"Bounding box text received: '{decoded_output}'")
+            return None
+        except Exception as e:
+            print(f"Error: {e}")
+            return None
+
+
+    def _get_bounding_boxes_openai(self, file: str):
         """
         Retrieve bounding box coordinates from an image using OpenAI API.
         :param file: Path to the image file.
@@ -520,11 +617,12 @@ class BoundingBoxGenerator:
         :rtype: tuple or None
         """
 
-        self.client = OpenAI(api_key=self.openai_key)
 
-        with open(file, "rb") as img_file:
-            encoded_image = base64.b64encode(img_file.read()).decode('utf-8')
+
         try:
+            with open(file, "rb") as img_file:
+                encoded_image = base64.b64encode(img_file.read()).decode('utf-8')
+
             response = self.client.chat.completions.create(
                 model=self.openai_model,
                 messages=[
@@ -533,7 +631,7 @@ class BoundingBoxGenerator:
                         "content": [
                             {
                                 "type": "text",
-                                "text": f"Give me just one bounding box coordinates for the object most likely to be in the image from this list '{self.top_words}' ""in this image in the format: (x_min, y_min, x_max, y_max), where all values are integers without any words or letters."
+                                "text": f"Give me just one bounding box coordinates for the object most likely to be in the image from this list '{self.top_words}' ""in this image in the format: x_min, y_min, x_max, y_max, where all values are integers without any words or letters."
                             },
                             {
                                 "type": "image_url",
@@ -548,16 +646,32 @@ class BoundingBoxGenerator:
             )
             bounding_box_text = response.choices[0].message.content.strip()
             print(bounding_box_text)
-            bounding_box = ast.literal_eval(bounding_box_text)
-            if isinstance(bounding_box, tuple) and len(bounding_box) == 4:
+            match = re.search(r'(\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+)', bounding_box_text)
+            if match:
+                bounding_box = match.group(1)
+                print(f"Extracted bounding box text: '{bounding_box}'")  # Debug statement
+
+                parts = bounding_box_text.split(',')
+                if len(parts) != 4:
+                    raise ValueError("Expected four comma-separated values for bounding box.")
+
+                bounding_box = tuple(int(part.strip()) for part in parts)
+                print(f"Parsed bounding box: {bounding_box}")  # Debug statement
+
                 return bounding_box
             else:
-                raise ValueError("Invalid bounding box format")
+                raise ValueError("No valid bounding box pattern found in the response.")
+
+        except ValueError as ve:
+            print(f"ValueError while parsing bounding box: {ve}")
+            print(f"Bounding box text received: '{bounding_box_text}'")
+            return None
         except Exception as e:
             print(f"Error: {e}")
             return None
 
-    def visualize_bounding_box(image_path, bounding_box):
+    @staticmethod
+    def visualize_bounding_box(image_path: str, bounding_box):
         """
         Visualize a bounding box on an image.
         :param image_path: The file path to the image to be visualized.
@@ -577,7 +691,7 @@ class BoundingBoxGenerator:
         else:
             print("No bounding box to visualize.")
 
-    def _save_image_with_bounding_box(self, image_path,  label, bounding_box):
+    def _save_image_with_bounding_box(self, image_path: str,  label: str, bounding_box):
         """
         Saves an image with a bounding box in the folder structure `smer_bounding_boxes/{label}`.
 
