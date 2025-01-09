@@ -19,7 +19,6 @@ import seaborn as sns
 from tqdm import tqdm
 from lime.lime_text import LimeTextExplainer
 from PIL import Image
-import ast
 import cv2
 from typing import Union, Optional, List
 from os import PathLike
@@ -130,7 +129,7 @@ class ImageClassifier:
                 encoded_image = Image.open(file)
                 message = [
                     {
-                        "role": "user", #menim veci
+                        "role": "user",  # menim veci
                         "content": [
                             {"type": "text", "text": self.system_prompt}]
                     },
@@ -311,7 +310,8 @@ class ImageClassifier:
                 # Calculate original probability for both SMER and LIME
                 original_word_indices = [i for word, i in word_to_index.items()]
                 original_embeddings = [np.array(row['Embedding'][i]) for i in original_word_indices]
-                original_aggregated_embedding = np.mean(original_embeddings, axis=0) if original_embeddings else np.zeros(VECTOR_SIZE)
+                original_aggregated_embedding = np.mean(original_embeddings,
+                                                        axis=0) if original_embeddings else np.zeros(VECTOR_SIZE)
                 original_probs = self.logreg_model.predict_proba([original_aggregated_embedding])[0]
                 original_class = np.argmax(original_probs)
                 original_prob = original_probs[original_class]
@@ -327,7 +327,8 @@ class ImageClassifier:
                         temp_text = ' '.join(w for w in words_SMER if w != word)
                         temp_word_indices = [word_to_index[w] for w in temp_text.split() if w in word_to_index]
                         temp_embeddings = [np.array(row['Embedding'][i]) for i in temp_word_indices]
-                        temp_aggregated_embedding = np.mean(temp_embeddings, axis=0) if temp_embeddings else np.zeros(VECTOR_SIZE)
+                        temp_aggregated_embedding = np.mean(temp_embeddings, axis=0) if temp_embeddings else np.zeros(
+                            VECTOR_SIZE)
                         temp_prob = self.logreg_model.predict_proba([temp_aggregated_embedding])[0][original_class]
 
                         # Calculate the drop in probability
@@ -337,10 +338,13 @@ class ImageClassifier:
                         most_important_word = max(word_importances, key=word_importances.get)
                         altered_text_SMER = ' '.join(w for w in altered_text_SMER.split() if w != most_important_word)
 
-                        altered_word_indices = [word_to_index[w] for w in altered_text_SMER.split() if w in word_to_index]
+                        altered_word_indices = [word_to_index[w] for w in altered_text_SMER.split() if
+                                                w in word_to_index]
                         altered_embeddings = [np.array(row['Embedding'][i]) for i in altered_word_indices]
-                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(VECTOR_SIZE)
-                        altered_prob = self.logreg_model.predict_proba([altered_aggregated_embedding])[0][original_class]
+                        altered_aggregated_embedding = np.mean(altered_embeddings,
+                                                               axis=0) if altered_embeddings else np.zeros(VECTOR_SIZE)
+                        altered_prob = self.logreg_model.predict_proba([altered_aggregated_embedding])[0][
+                            original_class]
                     else:
                         altered_prob = original_prob
 
@@ -364,9 +368,12 @@ class ImageClassifier:
                         most_important_word = max(importance_scores, key=importance_scores.get)
                         altered_text_LIME = ' '.join(w for w in words_LIME if w != most_important_word)
 
-                        altered_word_indices = [description.split().index(w) for w in altered_text_LIME.split() if w in description.split()]
-                        altered_embeddings = [row['Embedding'][i] for i in altered_word_indices if i < len(row['Embedding'])]
-                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(VECTOR_SIZE)
+                        altered_word_indices = [description.split().index(w) for w in altered_text_LIME.split() if
+                                                w in description.split()]
+                        altered_embeddings = [row['Embedding'][i] for i in altered_word_indices if
+                                              i < len(row['Embedding'])]
+                        altered_aggregated_embedding = np.mean(altered_embeddings,
+                                                               axis=0) if altered_embeddings else np.zeros(VECTOR_SIZE)
                         altered_probs = self.logreg_model.predict_proba([altered_aggregated_embedding])[0]
                         altered_prob_LIME = altered_probs[original_class]
 
@@ -392,7 +399,6 @@ class ImageClassifier:
         plt.legend()
         plt.grid(True)
         plt.show()
-
 
     def plot_important_words(self):
         """"""
@@ -503,16 +509,16 @@ class ImageClassifier:
 
 class BoundingBoxGenerator:
     def __init__(self,
-             data: Union[str, Path],
-             top_words: List[str],
-             openai_key: Optional[str] = None,
-             openai_model: Optional[str] = None,
-             local_model_path: Optional[str] = None):
+                 data: Union[str, Path],
+                 top_words: List[str],
+                 openai_key: Optional[str] = None,
+                 openai_model: Optional[str] = None,
+                 local_model_path: Optional[str] = None):
         self.data_folder = Path(data)
         self.top_words = top_words
 
         self.model_host = "openai" if openai_model else "local"
-        if(self.model_host == "openai"):
+        if (self.model_host == "openai"):
             if not openai_key:
                 raise ValueError("OpenAI key must be provided when using OpenAI API.")
             if not openai_model:
@@ -564,9 +570,9 @@ class BoundingBoxGenerator:
             message = [
                 {
                     "role": "user",
-                     "content": [
-                         {"type": "text", "text": prompt},
-                         {"type": "image", "data": encoded_image},
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image", "data": encoded_image},
                     ]
                 }
             ]
@@ -581,7 +587,6 @@ class BoundingBoxGenerator:
             output = self.model.generate(**inputs, max_new_tokens=80)
             decoded_output = self.tokenizer.decode(output[0], skip_special_tokens=True).strip()
             print(f"Raw bounding box response: '{decoded_output}'")  # Debug statement
-
 
             match = re.search(r'(\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+)', decoded_output)
             if match:
@@ -607,7 +612,6 @@ class BoundingBoxGenerator:
             print(f"Error: {e}")
             return None
 
-
     def _get_bounding_boxes_openai(self, file: str):
         """
         Retrieve bounding box coordinates from an image using OpenAI API.
@@ -616,8 +620,6 @@ class BoundingBoxGenerator:
         :return: Bounding box coordinates in the format (x_min, y_min, x_max, y_max) or None if an error occurs.
         :rtype: tuple or None
         """
-
-
 
         try:
             with open(file, "rb") as img_file:
@@ -691,7 +693,8 @@ class BoundingBoxGenerator:
         else:
             print("No bounding box to visualize.")
 
-    def _save_image_with_bounding_box(self, image_path: str,  label: str, bounding_box):
+    @staticmethod
+    def _save_image_with_bounding_box(image_path: str, label: str, bounding_box):
         """
         Saves an image with a bounding box in the folder structure `smer_bounding_boxes/{label}`.
 
