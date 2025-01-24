@@ -367,12 +367,7 @@ class ImageClassifier:
           5) Plots the resulting AOPC curves for SMER and LIME.
 
         """
-        # 1) =========================
-        # Predict probabilities for a text using old aggregator approach
-
-        # 2) =========================
-        # SMER IMPORTANCES
-
+        # SMER importance score calculation
         smer_rows = []
         for idx, row in tqdm(self.df_AOPC.iterrows(), total=len(self.df_AOPC), desc="Computing SMER importances"):
             text = row['Description']
@@ -395,18 +390,13 @@ class ImageClassifier:
                     'importance': abs(drop)
                 })
 
-        smer_df = pd.DataFrame(smer_rows)  # columns => ['word', 'importance']
-
-        # 3) =========================
-        # LIME IMPORTANCES
-        # 3) =========================
-        # Infer class names if available
+        smer_df = pd.DataFrame(smer_rows)
         if 'Label' in self.df_AOPC.columns:
             class_names = self.df_AOPC['Label'].unique().tolist()
         else:
             class_names = []
 
-        # Create a single LIME explainer
+        # Lime imporance score calculation
         explainer = LimeTextExplainer(class_names=class_names, random_state=42)
 
         lime_rows = []
@@ -422,19 +412,18 @@ class ImageClassifier:
                 num_features=len(text.split())
             )
 
-            local_importances = exp.as_list()  # list of (word, importance)
+            local_importances = exp.as_list()
             for w, imp in local_importances:
                 lime_rows.append({
                     'word': w,
                     'importance': abs(imp)
                 })
 
-        lime_df = pd.DataFrame(lime_rows)  # columns => ['word', 'importance']
+        lime_df = pd.DataFrame(lime_rows)
 
-        # 4) =========================
-        # AGGREGATE & SELECT TOP WORDS
+        # Result aggregation, selection of top words
+
         # SMER top 20
-
         global_importances_smer = (
             smer_df.groupby('word')['importance'].mean()
             .reset_index()
@@ -450,14 +439,12 @@ class ImageClassifier:
         )
         top_words_lime = global_importances_lime['word'].head(20).tolist()
 
-        # 5) =========================
-        # Compute AOPC
+        # Compute AOPC score
 
         AOPC_SMER = self.compute_aopc(self.df_AOPC, top_words_smer, max_K)
         AOPC_LIME = self.compute_aopc(self.df_AOPC, top_words_lime, max_K)
 
-        # 6) =========================
-        # PLOT
+        # Visualize results
 
         plt.figure(figsize=(10, 6))
         x_values = range(0, max_K + 1)
