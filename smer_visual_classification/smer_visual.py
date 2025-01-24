@@ -2,13 +2,11 @@ from pathlib import Path
 from tkinter import Image
 import pandas as pd
 import base64
-from os import PathLike
-from typing import Union
 from sklearn.linear_model import LogisticRegression
 import numpy as np
 import torch
 from openai import OpenAI
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModel
 from transformers import MllamaForConditionalGeneration, AutoProcessor
 import os
 from sklearn.model_selection import train_test_split
@@ -26,7 +24,7 @@ from os import PathLike
 
 class ImageClassifier:
     def __init__(self, openai_model=None, openai_embedding=None, openai_key=None,
-                 local_model_path=None, local_embedding_path=None, bound_boxes = False):
+                 local_model_path=None, local_embedding_path=None):
         """
         Initialize the ImageClassifier with OpenAI API or a local model.
         :param use_openai: Boolean flag to determine whether to use OpenAI API or a local model.
@@ -69,8 +67,9 @@ class ImageClassifier:
         self.data_folder = data
         self.dataset = pd.DataFrame(getattr(self, f"_{self.model_host}_image_description")(),
                                     columns=['Image', 'Description', 'Embedding', 'Label'])
-        self.embedding_length = len(self.dataset['Embedding'].iloc[0])
         self.dataset['Aggregated_embedding'] = self.dataset['Embedding'].apply(self._aggregate_embeddings)
+        self.embedding_length = len(self.dataset['Aggregated_embedding'].iloc[0])
+
         self.dataset.to_csv('embedded_dataset.csv')
         self.classify_with_logreg()
         self.plot_important_words()
@@ -80,8 +79,6 @@ class ImageClassifier:
     def _openai_image_description(self) -> Union[str, None]:
         """
         Generate image description with the use of OpenAI API.
-        :param prompt: Text specification of the instruction for the LLM.
-        :type prompt: str
         :return: Text description of the image if no exception occurs, None otherwise
         """
         self.client = OpenAI(api_key=self.open_ai_key)
@@ -130,11 +127,6 @@ class ImageClassifier:
             try:
                 encoded_image = Image.open(file)
                 message = [
-                    {
-                        "role": "system",
-                        "content": [
-                            {"type": "text", "text": self.system_prompt}]
-                    },
                     {
                         "role": "user",
                         "content": [
@@ -289,108 +281,194 @@ class ImageClassifier:
 
         self.df_AOPC = self.dataset[X_train.shape[0] + 1:].reset_index(drop=True)
 
-    def plot_aopc(self):
+
+    def predict_proba_for_text(self, text, row):
         """
-        Plot Average Output Probability Change (AOPC) as a function of iteratively removing important words,
-        with calculations for both SMER and LIME explanations within a single loop.
+        Reconstructs embeddings from row['Embedding'] for the words present in `text`,
+        then uses mean pooling + logreg_model.predict_proba().
         """
-        max_K = 6  # Maximum number of top words to remove
-        avg_drops_SMER = []
-        avg_drops_LIME = []
-        explainer = LimeTextExplainer(class_names=self.dataset['Label'].unique())
+        original_tokens = row['Description'].split()
+        word_to_index = {w: i for i, w in enumerate(original_tokens)}
 
-        for K in tqdm(range(1, max_K + 1)):
-            drops_SMER = []
-            drops_LIME = []
+        text_words = text.split()
+        valid_indices = [word_to_index[w] for w in text_words if w in word_to_index]
 
-            for idx, row in self.df_AOPC.iterrows():
-                description = row['Description']
-                word_to_index = {word: i for i, word in enumerate(description.split())}
+        if len(valid_indices) > 0:
+            emb = np.mean([np.array(row['Embedding'][ix]) for ix in valid_indices], axis=0)
+        else:
+            emb = np.zeros(self.embedding_length)
 
-                # Calculate original probability for both SMER and LIME
-                original_word_indices = [i for word, i in word_to_index.items()]
-                original_embeddings = [np.array(row['Embedding'][i]) for i in original_word_indices]
-                original_aggregated_embedding = np.mean(original_embeddings, axis=0) if original_embeddings else np.zeros(self.embedding_length)
-                original_probs = self.logreg_model.predict_proba([original_aggregated_embedding])[0]
-                original_class = np.argmax(original_probs)
-                original_prob = original_probs[original_class]
+        probs = self.logreg_model.predict_proba([emb])[0]
+        return probs
 
-                # --- SMER Calculation ---
-                altered_text_SMER = description
-                for _ in range(K):
-                    word_importances = {}
-                    words_SMER = altered_text_SMER.split()
 
-                    # Calculate importance of each word (SMER)
-                    for word in words_SMER:
-                        temp_text = ' '.join(w for w in words_SMER if w != word)
-                        temp_word_indices = [word_to_index[w] for w in temp_text.split() if w in word_to_index]
-                        temp_embeddings = [np.array(row['Embedding'][i]) for i in temp_word_indices]
-                        temp_aggregated_embedding = np.mean(temp_embeddings, axis=0) if temp_embeddings else np.zeros(self.embedding_length)
-                        temp_prob = self.logreg_model.predict_proba([temp_aggregated_embedding])[0][original_class]
+    def compute_aopc(self, df, top_words, max_K):
+        """
+        Remove up to K of the specified `top_words` from each text
+        and measure probability drop of the original predicted class.
+        """
+        avg_drops = []
+        for K in range(0, max_K + 1):
+            drops = []
+            for idx2, row2 in df.iterrows():
+                text2 = row2['Description']
+                original_probs2 = self.predict_proba_for_text(text2, row2)
+                original_class2 = np.argmax(original_probs2)
+                original_prob2 = original_probs2[original_class2]
 
-                        # Calculate the drop in probability
-                        word_importances[word] = original_prob - temp_prob
+                # Which of the top_words appear in the text?
+                words_in_text2 = text2.split()
+                top_in_text2 = [w for w in top_words if w in words_in_text2]
 
-                    if word_importances:
-                        most_important_word = max(word_importances, key=word_importances.get)
-                        altered_text_SMER = ' '.join(w for w in altered_text_SMER.split() if w != most_important_word)
+                # Remove up to K
+                words_to_remove2 = top_in_text2[:K]
+                if not words_to_remove2:
+                    drop2 = 0.0
+                else:
+                    altered_text2 = ' '.join(w for w in words_in_text2 if w not in words_to_remove2)
+                    altered_probs2 = self.predict_proba_for_text(altered_text2, row2)
+                    altered_prob2 = altered_probs2[original_class2]
+                    drop2 = original_prob2 - altered_prob2
 
-                        altered_word_indices = [word_to_index[w] for w in altered_text_SMER.split() if
-                                                w in word_to_index]
-                        altered_embeddings = [np.array(row['Embedding'][i]) for i in altered_word_indices]
-                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(self.embedding_length)
-                        altered_prob = self.logreg_model.predict_proba([altered_aggregated_embedding])[0][original_class]
-                    else:
-                        altered_prob = original_prob
+                drops.append(drop2)
 
-                    # Calculate and store the drop for SMER
-                    drop_SMER = original_prob - altered_prob
-                    drops_SMER.append(drop_SMER)
+            avg_drops.append(np.mean(drops) if drops else 0.0)
 
-                # --- LIME Calculation ---
-                exp = explainer.explain_instance(description, lambda texts: self.logreg_model.predict_proba(
-                    [np.mean([np.array(row['Embedding'][i]) for i in range(len(row['Embedding']))], axis=0)
-                     for text in texts]), num_features=len(description.split()))
+        return avg_drops
 
-                importance_scores = {word: abs(score) for word, score in exp.as_list()}
-                altered_text_LIME = description
+    def build_custom_predict(self, row):
+        """
+        Returns a function that LIME calls like classifier_fn(texts:list[str]) -> np.ndarray
+        for the old aggregator approach.
+        """
+        def predict_for_lime(texts):
+            emb_list = []
+            original_tokens = row['Description'].split()
+            word_to_index = {w: i for i, w in enumerate(original_tokens)}
 
-                for _ in range(K):
-                    words_LIME = altered_text_LIME.split()
+            for t in texts:
+                t_words = t.split()
+                valid_indices = [word_to_index[x] for x in t_words if x in word_to_index]
+                if len(valid_indices) > 0:
+                    emb = np.mean([np.array(row['Embedding'][ix]) for ix in valid_indices], axis=0)
+                else:
+                    emb = np.zeros(self.embedding_length)
+                emb_list.append(emb)
+            return self.logreg_model.predict_proba(emb_list)
+        return predict_for_lime
 
-                    # Find and remove the most important word (LIME)
-                    if importance_scores:
-                        most_important_word = max(importance_scores, key=importance_scores.get)
-                        altered_text_LIME = ' '.join(w for w in words_LIME if w != most_important_word)
+    def plot_aopc(self, max_K = 6):
+        """
+        A single function that:
+          1) Computes SMER importances for each row in df_AOPC.
+          2) Computes LIME importances for each row in df_AOPC.
+          3) Aggregates them globally to find top 20 words.
+          4) Computes AOPC by removing up to K of these words from each text.
+          5) Plots the resulting AOPC curves for SMER and LIME.
 
-                        altered_word_indices = [description.split().index(w) for w in altered_text_LIME.split() if w in description.split()]
-                        altered_embeddings = [row['Embedding'][i] for i in altered_word_indices if i < len(row['Embedding'])]
-                        altered_aggregated_embedding = np.mean(altered_embeddings, axis=0) if altered_embeddings else np.zeros(self.embedding_length)
-                        altered_probs = self.logreg_model.predict_proba([altered_aggregated_embedding])[0]
-                        altered_prob_LIME = altered_probs[original_class]
+        """
+        # 1) =========================
+        # Predict probabilities for a text using old aggregator approach
 
-                        # Remove the word from importance_scores to avoid selecting it again
-                        importance_scores.pop(most_important_word, None)
-                    else:
-                        altered_prob_LIME = original_prob
+        # 2) =========================
+        # SMER IMPORTANCES
 
-                    # Calculate and store the drop for LIME
-                    drop_LIME = original_prob - altered_prob_LIME
-                    drops_LIME.append(drop_LIME)
+        smer_rows = []
+        for idx, row in tqdm(self.df_AOPC.iterrows(), total=len(self.df_AOPC), desc="Computing SMER importances"):
+            text = row['Description']
+            original_probs = self.predict_proba_for_text(text, row)
+            original_class = np.argmax(original_probs)
+            original_prob = original_probs[original_class]
 
-            avg_drops_SMER.append(np.mean(drops_SMER))
-            avg_drops_LIME.append(np.mean(drops_LIME))
+            words = text.split()
+            for w in words:
+                # Remove this word
+                altered_text = ' '.join(token for token in words if token != w)
+                if not altered_text.strip():
+                    drop = 0.0
+                else:
+                    altered_probs = self.predict_proba_for_text(altered_text, row)
+                    drop = original_prob - altered_probs[original_class]
 
-        # Plot both SMER and LIME AOPC results
+                smer_rows.append({
+                    'word': w,
+                    'importance': abs(drop)
+                })
+
+        smer_df = pd.DataFrame(smer_rows)  # columns => ['word', 'importance']
+
+        # 3) =========================
+        # LIME IMPORTANCES
+        # 3) =========================
+        # Infer class names if available
+        if 'Label' in self.df_AOPC.columns:
+            class_names = self.df_AOPC['Label'].unique().tolist()
+        else:
+            class_names = []
+
+        # Create a single LIME explainer
+        explainer = LimeTextExplainer(class_names=class_names, random_state=42)
+
+        lime_rows = []
+
+        for idx, row in tqdm(self.df_AOPC.iterrows(), total=len(self.df_AOPC), desc="Computing LIME importances"):
+            text = row['Description']
+            lime_predict_fn = self.build_custom_predict(row)
+
+            # Explain instance
+            exp = explainer.explain_instance(
+                text_instance=text,
+                classifier_fn=lime_predict_fn,
+                num_features=len(text.split())
+            )
+
+            local_importances = exp.as_list()  # list of (word, importance)
+            for w, imp in local_importances:
+                lime_rows.append({
+                    'word': w,
+                    'importance': abs(imp)
+                })
+
+        lime_df = pd.DataFrame(lime_rows)  # columns => ['word', 'importance']
+
+        # 4) =========================
+        # AGGREGATE & SELECT TOP WORDS
+        # SMER top 20
+
+        global_importances_smer = (
+            smer_df.groupby('word')['importance'].mean()
+            .reset_index()
+            .sort_values('importance', ascending=False)
+        )
+        top_words_smer = global_importances_smer['word'].head(20).tolist()
+
+        # LIME top 20
+        global_importances_lime = (
+            lime_df.groupby('word')['importance'].mean()
+            .reset_index()
+            .sort_values('importance', ascending=False)
+        )
+        top_words_lime = global_importances_lime['word'].head(20).tolist()
+
+        # 5) =========================
+        # Compute AOPC
+
+        AOPC_SMER = self.compute_aopc(self.df_AOPC, top_words_smer, max_K)
+        AOPC_LIME = self.compute_aopc(self.df_AOPC, top_words_lime, max_K)
+
+        # 6) =========================
+        # PLOT
+
         plt.figure(figsize=(10, 6))
-        plt.plot(range(1, max_K + 1), avg_drops_SMER, marker='o', label='SMER AOPC')
-        plt.plot(range(1, max_K + 1), avg_drops_LIME, marker='x', label='LIME AOPC')
+        x_values = range(0, max_K + 1)
+        plt.plot(x_values, AOPC_SMER, marker='o', label='SMER')
+        plt.plot(x_values, AOPC_LIME, marker='x', label='LIME')
+
         plt.xlabel('Number of Words Removed (K)')
-        plt.ylabel('Average Output Probability Change (AOPC)')
-        plt.title('AOPC vs. Number of Important Words Removed (SMER and LIME)')
-        plt.legend()
+        plt.ylabel('Average Probability Drop')
+        plt.title('Comparison of AOPC vs. Number of Important Words Removed')
         plt.grid(True)
+        plt.legend()
         plt.show()
 
     def plot_important_words(self):
@@ -424,12 +502,6 @@ class ImageClassifier:
 
         # Show plot
         plt.show()
-
-    def _get_bound_boxes_openai(self):
-        """TODO"""
-
-    def _get_bound_boxes_local(self):
-        """TODO"""
 
     @staticmethod
     def _preprocess_text(text: str) -> str:
@@ -510,7 +582,7 @@ class BoundingBoxGenerator:
         self.top_words = top_words
 
         self.model_host = "openai" if openai_model else "local"
-        if (self.model_host == "openai"):
+        if self.model_host == "openai":
             if not openai_key:
                 raise ValueError("OpenAI key must be provided when using OpenAI API.")
             if not openai_model:
