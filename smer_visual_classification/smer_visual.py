@@ -511,7 +511,6 @@ class ImageClassifier:
         :type text: string
         :return: lemmatized, normalized text
         """
-        # Split the text on commas
         try:
             nlp = spacy.load('en_core_web_sm')
         except OSError:
@@ -521,17 +520,12 @@ class ImageClassifier:
         words = text.split(',')
         lemmatized_words = []
         for word in words:
-            # Strip leading/trailing whitespace
             word = word.strip()
-            # Remove punctuation attached to words (e.g., periods)
             word = re.sub(r'[^\w\s]', '', word)
-            # Proceed only if the word is not empty
             if word:
                 doc = nlp(word)
-                # Lemmatize the word
                 lemma = ' '.join([token.lemma_ for token in doc])
                 lemmatized_words.append(lemma)
-        # Join the lemmatized words with a single comma, ignoring empty entries
         result = ','.join(lemmatized_words)
         return result
 
