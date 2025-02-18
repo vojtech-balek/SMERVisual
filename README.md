@@ -9,7 +9,7 @@ The package supports both **OpenAI API** models and **local language models**, o
 ## **Installation**
 Install SMERVisual using pip:
 ```sh
-pip install smer-image-classification
+pip install smer-visual
 ```
 
 ---
