@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smer-visual"
+version = "0.0.1"
+authors = [
+    { name = "Vojtěch Balek", email = "vojta.balek@gmail.com" },
+    { name = "Julija Jeršova", email = "poty01@vse.cz"}
+]
+description = "This package provides means of explainable classification of images with LLM-generated text descriptions, that are then analyzed using the Self Model Entities Related (SMER) explanation technique."
+readme = "README.md"a
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "pandas",
+    "numpy",
+    "scikit-learn",
+    "torch",
+    "openai",
+    "transformers",
+    "spacy",
+    "matplotlib",
+    "seaborn",
+    "tqdm",
+    "lime",
+    "Pillow",
+    "opencv-python"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/vojtech-balek/SMERVisual"
+"Bug Tracker" = "https://github.com/vojtech-balek/SMERVisual/issues"
