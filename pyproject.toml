@@ -4,10 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smer-visual"
-version = "0.0.1"
+version = "0.0.2"
 authors = [
     { name = "Vojtěch Balek", email = "vojta.balek@gmail.com" },
-    { name = "Julija Jeršova", email = "poty01@vse.cz"}
+    { name = "Julija Jeršova", email = "poty01@vse.cz"},
+    { name = "Tomáš Kliegr", email = "tomas.kliegr@vse.cz" },
+    { name = "Michael Mehmet Ay", email = "aymi00@vse.cz"}
 ]
 description = "This package provides means of explainable classification of images with LLM-generated text descriptions, that are then analyzed using the Self Model Entities Related (SMER) explanation technique."
 readme = "README.md"
