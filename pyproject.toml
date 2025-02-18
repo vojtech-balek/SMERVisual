@@ -10,24 +10,25 @@ authors = [
     { name = "Julija Jeršova", email = "poty01@vse.cz"}
 ]
 description = "This package provides means of explainable classification of images with LLM-generated text descriptions, that are then analyzed using the Self Model Entities Related (SMER) explanation technique."
-readme = "README.md"a
+readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
-    "pandas",
-    "numpy",
+    "pandas==2.2.3",
+    "numpy==1.26.4",
     "scikit-learn",
-    "torch",
-    "openai",
-    "transformers",
-    "spacy",
-    "matplotlib",
-    "seaborn",
-    "tqdm",
+    "torch==2.4.1",
+    "openai==1.52.2",
+    "transformers==4.48.0",
+    "spacy==3.8.2",
+    "matplotlib==3.9.2",
+    "seaborn==0.13.2",
+    "tqdm==4.65.0",
     "lime",
     "Pillow",
     "opencv-python"
 ]
+
 
 [project.urls]
 "Homepage" = "https://github.com/vojtech-balek/SMERVisual"
