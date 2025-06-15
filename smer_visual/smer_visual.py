@@ -122,3 +122,79 @@ def image_description(
         return process_with_openai(OpenAI(api_key=api_key))
     else:
         return process_with_local_model()
+
+
+def get_description_embeddings(
+        descriptions: dict,
+        embedding_model: Union[str, Path],
+        api_key: Optional[str] = None,
+) -> dict:
+    """
+    Generate embeddings for image descriptions using either OpenAI or local models.
+
+    Args:
+        descriptions: Dictionary output from image_description()
+        embedding_model: Model identifier for OpenAI or path to local model
+        api_key: OpenAI API key (required for OpenAI embeddings)
+
+    Returns:
+        Dictionary with the same structure as input, plus embeddings
+    """
+    OPENAI_MODELS = {'text-embedding-ada-002'}
+    results = descriptions.copy()
+
+    def process_with_openai(client: OpenAI) -> None:
+        for file_path in results:
+            if results[file_path]['description']:
+                try:
+                    response = client.embeddings.create(
+                        input=results[file_path]['description'],
+                        model=embedding_model
+                    )
+                    results[file_path]['embedding'] = response.data[0].embedding
+                except Exception as e:
+                    results[file_path]['embedding'] = None
+                    results[file_path]['error'] = f"Embedding error: {str(e)}"
+            else:
+                results[file_path]['embedding'] = None
+
+    def process_with_local_model() -> None:
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(embedding_model)
+            model = AutoModel.from_pretrained(embedding_model)
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            model.to(device)
+
+            for file_path in results:
+                if results[file_path]['description']:
+                    try:
+                        inputs = tokenizer(
+                            results[file_path]['description'],
+                            return_tensors='pt',
+                            padding=True,
+                            truncation=True,
+                            max_length=512
+                        )
+                        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+                        with torch.no_grad():
+                            outputs = model(**inputs)
+
+                        results[file_path]['embedding'] = outputs.last_hidden_state[:, 0, :].cpu().numpy()[0]
+                    except Exception as e:
+                        results[file_path]['embedding'] = None
+                        results[file_path]['error'] = f"Embedding error: {str(e)}"
+                else:
+                    results[file_path]['embedding'] = None
+
+        except Exception as e:
+            raise ValueError(f"Error initializing local model: {str(e)}")
+
+    if isinstance(embedding_model, str) and embedding_model in OPENAI_MODELS:
+        if not api_key:
+            raise ValueError("API key required for OpenAI embeddings")
+        process_with_openai(OpenAI(api_key=api_key))
+    else:
+        process_with_local_model()
+
+    return results
