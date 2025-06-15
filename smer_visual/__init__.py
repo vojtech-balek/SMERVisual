@@ -1,2 +1,2 @@
-from .smer_visual import ImageClassifier
-from .smer_visual import BoundingBoxGenerator
+from .smer_visual_old import ImageClassifier
+from .smer_visual_old import BoundingBoxGenerator
