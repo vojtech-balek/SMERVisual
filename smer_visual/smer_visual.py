@@ -77,8 +77,11 @@ def image_description(
         try:
             processor = AutoProcessor.from_pretrained(model)
             tokenizer = AutoTokenizer.from_pretrained(model)
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            local_model = MllamaForConditionalGeneration.from_pretrained(model).to(device)
+            local_model = MllamaForConditionalGeneration.from_pretrained(
+                model,
+                torch_dtype=torch.bfloat16,
+                device_map="auto",
+            )
 
             for file_path, label in _get_image_files_with_class(data_folder):
                 results[file_path] = {'label': label, 'description': None, 'error': None}
@@ -99,7 +102,7 @@ def image_description(
                         input_text,
                         add_special_tokens=False,
                         return_tensors="pt"
-                    ).to(device)
+                    ).to(local_model.device)
 
                     output = local_model.generate(**inputs, max_new_tokens=30)
                     decoded_text = tokenizer.decode(output[0], skip_special_tokens=True).strip()
