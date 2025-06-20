@@ -210,21 +210,12 @@ def get_description_embeddings(
     return results
 
 
-def classify_with_logreg(dataset: pd.DataFrame, X_train, y_train, X_test, y_test,
-                         logreg_model: LogisticRegression = LogisticRegression()) -> (pd.DataFrame, pd.DataFrame):
+def classify_with_logreg(dataset: pd.DataFrame, X_train,
+                         logreg_model: LogisticRegression) -> (pd.DataFrame, pd.DataFrame):
     """
     Use logistic regression to classify the instances and get feature weights.
     Maintains the original logic, focusing on improved readability.
     """
-    # Prepare feature (X) and label (y)
-    # X = np.stack(dataset['Aggregated_embedding'].values)
-    # y = dataset['Label']
-
-    logreg_model.fit(X_train, y_train)
-    accuracy = logreg_model.score(X_test, y_test)
-    print("Accuracy:", accuracy)
-
-    # Initialize columns for feature importance and sorted words
     dataset['Feature_Importance'] = None
     dataset['Sorted_Words_by_Importance'] = None
 
@@ -275,6 +266,63 @@ def classify_with_logreg(dataset: pd.DataFrame, X_train, y_train, X_test, y_test
     # Split final outputs as in the original code
     df_aopc = dataset[X_train.shape[0] + 1:].reset_index(drop=True)
     return df_aopc, dataset
+
+
+def compute_aopc(df, top_words, max_K, logreg_model):
+    """
+    Remove up to K of the specified `top_words` from each text
+    and measure probability drop of the original predicted class.
+    """
+    avg_drops = []
+    for K in range(0, max_K + 1):
+        drops = []
+        for idx2, row2 in df.iterrows():
+            text2 = row2['Description']
+            original_probs2 = _predict_proba_for_text(text2, row2, logreg_model)
+            original_class2 = np.argmax(original_probs2)
+            original_prob2 = original_probs2[original_class2]
+
+            # Which of the top_words appear in the text?
+            words_in_text2 = text2.split()
+            top_in_text2 = [w for w in top_words if w in words_in_text2]
+
+            # Remove up to K
+            words_to_remove2 = top_in_text2[:K]
+            if not words_to_remove2:
+                drop2 = 0.0
+            else:
+                altered_text2 = ' '.join(w for w in words_in_text2 if w not in words_to_remove2)
+                altered_probs2 = _predict_proba_for_text(altered_text2, row2, logreg_model)
+                altered_prob2 = altered_probs2[original_class2]
+                drop2 = original_prob2 - altered_prob2
+
+            drops.append(drop2)
+
+        avg_drops.append(np.mean(drops) if drops else 0.0)
+
+    return avg_drops
+
+
+def build_custom_predict(row, logreg_model):
+    """
+    Returns a function that LIME calls like classifier_fn(texts:list[str]) -> np.ndarray
+    for the old aggregator approach.
+    """
+    def predict_for_lime(texts):
+        emb_list = []
+        original_tokens = row['Description'].split()
+        word_to_index = {w: i for i, w in enumerate(original_tokens)}
+
+        for t in texts:
+            t_words = t.split()
+            valid_indices = [word_to_index[x] for x in t_words if x in word_to_index]
+            if len(valid_indices) > 0:
+                emb = np.mean([np.array(row['Embedding'][ix]) for ix in valid_indices], axis=0)
+            else:
+                emb = np.zeros(len(row['Embedding'][0]))
+            emb_list.append(emb)
+        return logreg_model.predict_proba(emb_list)
+    return predict_for_lime
 
 
 def _predict_proba_for_text(text, row, logreg_model):
