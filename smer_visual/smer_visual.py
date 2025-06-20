@@ -276,3 +276,22 @@ def classify_with_logreg(dataset: pd.DataFrame, X_train, y_train, X_test, y_test
     df_aopc = dataset[X_train.shape[0] + 1:].reset_index(drop=True)
     return df_aopc, dataset
 
+
+def _predict_proba_for_text(text, row, logreg_model):
+    """
+    Reconstructs embeddings from row['Embedding'] for the words present in `text`,
+    then uses mean pooling + logreg_model.predict_proba().
+    """
+    original_tokens = row['Description'].split()
+    word_to_index = {w: i for i, w in enumerate(original_tokens)}
+
+    text_words = text.split()
+    valid_indices = [word_to_index[w] for w in text_words if w in word_to_index]
+
+    if len(valid_indices) > 0:
+        emb = np.mean([np.array(row['Embedding'][ix]) for ix in valid_indices], axis=0)
+    else:
+        emb = np.zeros(len(row['Embedding'][0]))
+
+    probs = logreg_model.predict_proba([emb])[0]
+    return probs
