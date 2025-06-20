@@ -268,13 +268,13 @@ def classify_with_logreg(dataset: pd.DataFrame, X_train,
     return df_aopc, dataset
 
 
-def compute_aopc(df, top_words, max_K, logreg_model):
+def compute_aopc(df, top_words, max_k, logreg_model):
     """
     Remove up to K of the specified `top_words` from each text
     and measure probability drop of the original predicted class.
     """
     avg_drops = []
-    for K in range(0, max_K + 1):
+    for K in range(0, max_k + 1):
         drops = []
         for idx2, row2 in df.iterrows():
             text2 = row2['Description']
@@ -324,6 +324,140 @@ def build_custom_predict(row, logreg_model):
         return logreg_model.predict_proba(emb_list)
     return predict_for_lime
 
+
+def plot_aopc(df_aopc, logreg_model, max_k=6):
+    """
+    A single function that:
+      1) Computes SMER importances for each row in df_AOPC.
+      2) Computes LIME importances for each row in df_AOPC.
+      3) Aggregates them globally to find top 20 words.
+      4) Computes AOPC by removing up to K of these words from each text.
+      5) Plots the resulting AOPC curves for SMER and LIME.
+
+    """
+    # SMER importance score calculation
+    smer_rows = []
+    for idx, row in tqdm(df_aopc.iterrows(), total=len(df_aopc), desc="Computing SMER importances"):
+        text = row['Description']
+        original_probs = _predict_proba_for_text(text, row, logreg_model)
+        original_class = np.argmax(original_probs)
+        original_prob = original_probs[original_class]
+
+        words = text.split()
+        for w in words:
+            # Remove this word
+            altered_text = ' '.join(token for token in words if token != w)
+            if not altered_text.strip():
+                drop = 0.0
+            else:
+                altered_probs = _predict_proba_for_text(altered_text, row, logreg_model)
+                drop = original_prob - altered_probs[original_class]
+
+            smer_rows.append({
+                'word': w,
+                'importance': abs(drop)
+            })
+
+    smer_df = pd.DataFrame(smer_rows)
+    if 'Label' in df_aopc.columns:
+        class_names = df_aopc['Label'].unique().tolist()
+    else:
+        class_names = []
+
+    # Lime imporance score calculation
+    explainer = LimeTextExplainer(class_names=class_names, random_state=42)
+
+    lime_rows = []
+
+    for idx, row in tqdm(df_aopc.iterrows(), total=len(df_aopc), desc="Computing LIME importances"):
+        text = row['Description']
+        lime_predict_fn = build_custom_predict(row, logreg_model)
+
+        # Explain instance
+        exp = explainer.explain_instance(
+            text_instance=text,
+            classifier_fn=lime_predict_fn,
+            num_features=len(text.split())
+        )
+
+        local_importances = exp.as_list()
+        for w, imp in local_importances:
+            lime_rows.append({
+                'word': w,
+                'importance': abs(imp)
+            })
+
+    lime_df = pd.DataFrame(lime_rows)
+
+    # Result aggregation, selection of top words
+
+    # SMER top 20
+    global_importances_smer = (
+        smer_df.groupby('word')['importance'].mean()
+        .reset_index()
+        .sort_values('importance', ascending=False)
+    )
+    top_words_smer = global_importances_smer['word'].head(20).tolist()
+
+    # LIME top 20
+    global_importances_lime = (
+        lime_df.groupby('word')['importance'].mean()
+        .reset_index()
+        .sort_values('importance', ascending=False)
+    )
+    top_words_lime = global_importances_lime['word'].head(20).tolist()
+
+    # Compute AOPC score
+
+    AOPC_SMER = compute_aopc(df_aopc, top_words_smer, max_k, logreg_model)
+    AOPC_LIME = compute_aopc(df_aopc, top_words_lime, max_k, logreg_model)
+
+    # Visualize results
+
+    plt.figure(figsize=(10, 6))
+    x_values = range(0, max_k + 1)
+    plt.plot(x_values, AOPC_SMER, marker='o', label='SMER')
+    plt.plot(x_values, AOPC_LIME, marker='x', label='LIME')
+
+    plt.xlabel('Number of Words Removed (K)')
+    plt.ylabel('Average Probability Drop')
+    plt.title('Comparison of AOPC vs. Number of Important Words Removed')
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+
+
+def plot_important_words(dataset):
+    """"""
+    # Initialize a list to store the most important words
+    most_important_words = []
+
+    # Extract the most important word from each row
+    for idx in range(len(dataset)):
+        # Extract the first word from the 'Sorted_Words' column
+        sorted_words = dataset.at[idx, 'Sorted_Words_by_Importance_processed']
+        if sorted_words:
+            most_important_word = sorted_words.split(',')[0].lower()
+            most_important_words.append(most_important_word)
+
+    # Create a DataFrame to count occurrences of each most important word
+    importance_word_counts = pd.Series(most_important_words).value_counts().reset_index()
+    importance_word_counts.columns = ['Word', 'Count']
+
+    # Get the top 10 most important words
+    top_10_words = importance_word_counts.head(10)
+
+    # Plotting the top 10 results
+    plt.figure(figsize=(12, 8))
+    sns.barplot(data=top_10_words, x='Word', y='Count', palette='viridis', hue='Count')
+    plt.title('Top 10 Most Important Words Across Images')
+    plt.xlabel('Word')
+    plt.ylabel('Count')
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+
+    # Show plot
+    plt.show()
 
 def _predict_proba_for_text(text, row, logreg_model):
     """
