@@ -22,7 +22,7 @@ import cv2
 from typing import Union, Optional, List
 from os import PathLike
 
-from utils import _get_image_files_with_class, _encode_image
+from utils import _get_image_files_with_class, _encode_image, _aggregate_embeddings, _preprocess_text
 
 
 def image_description(
@@ -138,7 +138,9 @@ def get_description_embeddings(
         api_key: OpenAI API key (required for OpenAI embeddings)
 
     Returns:
-        Dictionary with the same structure as input, plus embeddings
+        Dictionary with the same structure as input, plus embeddings:
+        - 'embedding': Non-aggregated embeddings
+        - 'aggregated_embedding': Aggregated embeddings
     """
     OPENAI_MODELS = {'text-embedding-ada-002'}
     results = descriptions.copy()
@@ -151,12 +153,16 @@ def get_description_embeddings(
                         input=results[file_path]['description'],
                         model=embedding_model
                     )
-                    results[file_path]['embedding'] = response.data[0].embedding
+                    embeddings = response.data[0].embedding
+                    results[file_path]['embedding'] = embeddings
+                    results[file_path]['aggregated_embedding'] = _aggregate_embeddings([embeddings])
                 except Exception as e:
                     results[file_path]['embedding'] = None
+                    results[file_path]['aggregated_embedding'] = None
                     results[file_path]['error'] = f"Embedding error: {str(e)}"
             else:
                 results[file_path]['embedding'] = None
+                results[file_path]['aggregated_embedding'] = None
 
     def process_with_local_model() -> None:
         try:
@@ -180,12 +186,16 @@ def get_description_embeddings(
                         with torch.no_grad():
                             outputs = model(**inputs)
 
-                        results[file_path]['embedding'] = outputs.last_hidden_state[:, 0, :].cpu().numpy()[0]
+                        embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()[0]
+                        results[file_path]['embedding'] = embeddings
+                        results[file_path]['aggregated_embedding'] = _aggregate_embeddings([embeddings])
                     except Exception as e:
                         results[file_path]['embedding'] = None
+                        results[file_path]['aggregated_embedding'] = None
                         results[file_path]['error'] = f"Embedding error: {str(e)}"
                 else:
                     results[file_path]['embedding'] = None
+                    results[file_path]['aggregated_embedding'] = None
 
         except Exception as e:
             raise ValueError(f"Error initializing local model: {str(e)}")
@@ -198,3 +208,71 @@ def get_description_embeddings(
         process_with_local_model()
 
     return results
+
+
+def classify_with_logreg(dataset: pd.DataFrame, X_train, y_train, X_test, y_test,
+                         logreg_model: LogisticRegression = LogisticRegression()) -> (pd.DataFrame, pd.DataFrame):
+    """
+    Use logistic regression to classify the instances and get feature weights.
+    Maintains the original logic, focusing on improved readability.
+    """
+    # Prepare feature (X) and label (y)
+    # X = np.stack(dataset['Aggregated_embedding'].values)
+    # y = dataset['Label']
+
+    logreg_model.fit(X_train, y_train)
+    accuracy = logreg_model.score(X_test, y_test)
+    print("Accuracy:", accuracy)
+
+    # Initialize columns for feature importance and sorted words
+    dataset['Feature_Importance'] = None
+    dataset['Sorted_Words_by_Importance'] = None
+
+    # Compute importance of each word in the description
+    for idx in range(len(dataset)):
+        description = dataset.Description[idx]
+        words = description.split()
+
+        # Compute the aggregated embedding for the full description
+        word_embeddings = [dataset['Embedding'].iloc[idx][i] for i in range(len(words)) if words[i] in words]
+        if word_embeddings:
+            original_agg_emb = np.mean(word_embeddings, axis=0)
+        else:
+            original_agg_emb = np.zeros_like(dataset['Embedding'].iloc[idx][0])
+
+        # Predict probability with all words
+        original_prob = logreg_model.predict_proba(np.array([original_agg_emb]))[0]
+
+        # Calculate effectiveness of each word
+        importance_scores = {}
+        for word in words:
+            perturbed_text = ' '.join(w for w in words if w != word)
+            perturbed_words = perturbed_text.split()
+            perturbed_embeddings = [
+                dataset['Embedding'].iloc[idx][i]
+                for i in range(len(perturbed_words))
+                if perturbed_words[i] in perturbed_words
+            ]
+
+            if perturbed_embeddings:
+                perturbed_agg_emb = np.mean(perturbed_embeddings, axis=0)
+            else:
+                perturbed_agg_emb = np.zeros_like(dataset['Embedding'].iloc[idx][0])
+
+            perturbed_prob = logreg_model.predict_proba(np.array([perturbed_agg_emb]))[0]
+            drop = original_prob - perturbed_prob
+            class_index = logreg_model.classes_.tolist().index(dataset.Label[idx])
+            importance_scores[word] = drop[class_index]
+
+        # Store sorted importance
+        sorted_importance = sorted(importance_scores.items(), key=lambda x: x[1], reverse=True)
+        dataset.at[idx, 'Feature_Importance'] = ','.join(f"{w}: {s:.4f}" for w, s in sorted_importance)
+        dataset.at[idx, 'Sorted_Words_by_Importance'] = ','.join([w for w, _ in sorted_importance])
+
+    # Preprocess sorted words for the specified range
+    dataset['Sorted_Words_by_Importance_processed'] = dataset['Sorted_Words_by_Importance'].apply(_preprocess_text)
+
+    # Split final outputs as in the original code
+    df_aopc = dataset[X_train.shape[0] + 1:].reset_index(drop=True)
+    return df_aopc, dataset
+
