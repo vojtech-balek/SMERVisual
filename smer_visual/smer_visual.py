@@ -237,54 +237,61 @@ def classify_with_logreg(dataset: pd.DataFrame, X_train,
     Use logistic regression to classify the instances and get feature weights.
     Maintains the original logic, focusing on improved readability.
     """
-    dataset['Feature_Importance'] = None
-    dataset['Sorted_Words_by_Importance'] = None
+    dataset['feature_importance'] = None  # Initialize column
+    dataset['sorted_words_by_importance'] = None
 
-    # Compute importance of each word in the description
     for idx in range(len(dataset)):
         description = dataset.description[idx]
+
+        # Get the original prediction probability
+        original_embeddings = []
         words = description.split()
+        word_indices = [description.split().index(word) for word in words if word in description.split()]
+        word_embeddings = [dataset['embedding'].iloc[idx][i] for i in word_indices]
 
-        # Compute the aggregated embedding for the full description
-        word_embeddings = [dataset['embedding'].iloc[idx][i] for i in range(len(words)) if words[i] in words]
         if word_embeddings:
-            original_agg_emb = np.mean(word_embeddings, axis=0)
+            original_aggregated_embedding = np.mean(word_embeddings, axis=0)
         else:
-            original_agg_emb = np.zeros_like(dataset['embedding'].iloc[idx][0])
+            original_aggregated_embedding = np.zeros_like(dataset['embedding'].iloc[idx][0])
 
-        # Predict probability with all words
-        original_prob = logreg_model.predict_proba(np.array([original_agg_emb]))[0]
+        original_embeddings.append(original_aggregated_embedding)
+        original_embeddings = np.array(original_embeddings)
 
-        # Calculate effectiveness of each word
+        original_prob = logreg_model.predict_proba(original_embeddings)[0]
         importance_scores = {}
+
         for word in words:
             perturbed_text = ' '.join(w for w in words if w != word)
             perturbed_words = perturbed_text.split()
-            perturbed_embeddings = [
-                dataset['embedding'].iloc[idx][i]
-                for i in range(len(perturbed_words))
-                if perturbed_words[i] in perturbed_words
-            ]
+            perturbed_word_indices = [description.split().index(w) for w in perturbed_words if
+                                      w in description.split()]
+            perturbed_word_embeddings = [dataset['embedding'].iloc[idx][i] for i in perturbed_word_indices]
 
-            if perturbed_embeddings:
-                perturbed_agg_emb = np.mean(perturbed_embeddings, axis=0)
+            if perturbed_word_embeddings:
+                perturbed_aggregated_embedding = np.mean(perturbed_word_embeddings, axis=0)
             else:
-                perturbed_agg_emb = np.zeros_like(dataset['embedding'].iloc[idx][0])
+                perturbed_aggregated_embedding = np.zeros_like(dataset['embedding'].iloc[idx][0])
 
-            perturbed_prob = logreg_model.predict_proba(np.array([perturbed_agg_emb]))[0]
+            perturbed_embeddings = np.array([perturbed_aggregated_embedding])
+            perturbed_prob = logreg_model.predict_proba(perturbed_embeddings)[0]
             drop = original_prob - perturbed_prob
-            class_index = logreg_model.classes_.tolist().index(dataset.label[idx])
+
+            target_class = dataset.label[idx]
+            class_index = logreg_model.classes_.tolist().index(target_class)
             importance_scores[word] = drop[class_index]
 
-        # Store sorted importance
+        # Sort words by importance score
         sorted_importance = sorted(importance_scores.items(), key=lambda x: x[1], reverse=True)
-        dataset.at[idx, 'feature_importance'] = ','.join(f"{w}: {s:.4f}" for w, s in sorted_importance)
-        dataset.at[idx, 'sorted_words_by_importance'] = ','.join([w for w, _ in sorted_importance])
+        importance_str = ','.join(f"{word}:{score:.4f}" for word, score in sorted_importance)
+        dataset.at[idx, 'feature_importance'] = importance_str
 
-    # Preprocess sorted words for the specified range
-    dataset['sorted_sords_by_importance_processed'] = dataset['sorted_words_by_importance'].apply(_preprocess_text)
+        sorted_words_list = [word for word, score in sorted_importance]
+        sorted_words_str = ','.join(sorted_words_list)
+        dataset.at[idx, 'sorted_words_by_importance'] = sorted_words_str
 
-    # Split final outputs as in the original code
+    dataset['sorted_words_by_importance_processed'] = dataset['sorted_words_by_importance'].apply(
+        _preprocess_text)
+
     df_aopc = dataset[X_train.shape[0] + 1:].reset_index(drop=True)
     return df_aopc, dataset
 
@@ -380,7 +387,7 @@ def plot_aopc(df_aopc, logreg_model, max_k=6):
             })
 
     smer_df = pd.DataFrame(smer_rows)
-    if 'Label' in df_aopc.columns:
+    if 'label' in df_aopc.columns:
         class_names = df_aopc['label'].unique().tolist()
     else:
         class_names = []
