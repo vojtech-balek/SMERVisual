@@ -1,4 +1,4 @@
-"""smer_visual.py"""
+"""smer.py"""
 from pathlib import Path
 from tkinter import Image
 import pandas as pd
@@ -15,7 +15,7 @@ from lime.lime_text import LimeTextExplainer
 from PIL import Image
 from typing import Union, Optional
 
-from utils import _get_image_files_with_class, _encode_image, _aggregate_embeddings, _preprocess_text
+from .utils import _get_image_files_with_class, _encode_image, _preprocess_text
 
 
 def image_description(

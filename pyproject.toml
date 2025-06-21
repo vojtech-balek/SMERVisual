@@ -14,7 +14,7 @@ authors = [
 description = "This package provides means of explainable classification of images with LLM-generated text descriptions, that are then analyzed using the Self Model Entities Related (SMER) explanation technique."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
+license-files = ["LICENSE"]
 dependencies = [
     "opencv-python==4.11.0.86",
     "matplotlib==3.9.2",
