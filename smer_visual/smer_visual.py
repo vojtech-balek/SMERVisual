@@ -32,17 +32,29 @@ def image_description(
         user_prompt: str = "Describe this image in 7 words. Be concise, try to maximize the information about the objects in this image.",
 ) -> dict:
     """
-    Generate image descriptions using either OpenAI or local models.
+        Generate image descriptions using either OpenAI or local models.
 
-    Args:
-        model: Model identifier (e.g., 'gpt-4o-mini', '4o', 'o3') or path to local model
-        data_folder: Path to folder containing image files in class subfolders
-        api_key: OpenAI API key (required for OpenAI models)
-        user_prompt: Custom prompt for image description generation
+        Args:
+            model (Union[str, Path]): Model identifier (e.g., 'gpt-4o-mini', '4o', 'o3') or path to local model.
+            data_folder (Union[str, Path]): Path to folder containing image files in class subfolders.
+            api_key (Optional[str]): OpenAI API key (required for OpenAI models).
+            user_prompt (str): Custom prompt for image description generation.
 
-    Returns:
-        Dictionary mapping file paths to their descriptions, labels, and errors
-    """
+        Returns:
+            dict: Dictionary mapping file paths to their descriptions, labels, and errors.
+
+        Example:
+            >>> from smer_visual.smer_visual import image_description
+            >>> descriptions = image_description(
+            ...     model="gpt-4o-mini",
+            ...     data_folder="images/",
+            ...     api_key="your_api_key",
+            ...     user_prompt="Describe this image in 7 words."
+            ... )
+            >>> print(descriptions)
+            {'image1.jpg': {'label': 'cat', 'description': 'A cat sitting on a mat', 'error': None},
+             'image2.jpg': {'label': 'dog', 'description': 'A dog playing with a ball', 'error': None}}
+        """
     OPENAI_MODELS = {'gpt-4o-mini', '4o', 'o3', 'o3-mini', 'o3-pro', 'o1-pro'}
 
     def process_with_openai(client: OpenAI) -> dict:
@@ -133,16 +145,32 @@ def get_description_embeddings(
         api_key: Optional[str] = None,
 ) -> pd.DataFrame:
     """
-    Generate embeddings for image descriptions using either OpenAI or local models.
+        Generate embeddings for image descriptions using either OpenAI or local models.
 
-    Args:
-        descriptions: Dictionary output from image_description()
-        embedding_model: Model identifier for OpenAI or path to local model
-        api_key: OpenAI API key (required for OpenAI embeddings)
+        Args:
+            descriptions (dict): Dictionary output from `image_description()`.
+            embedding_model (Union[str, Path]): Model identifier for OpenAI or path to local model.
+            api_key (Optional[str]): OpenAI API key (required for OpenAI embeddings).
 
-    Returns:
-        Pandas DataFrame with columns: image, description, embedding, label
-    """
+        Returns:
+            pd.DataFrame: Pandas DataFrame with columns: image, description, embedding, label.
+
+        Example:
+            >>> from smer_visual.smer_visual import get_description_embeddings
+            >>> descriptions = {
+            ...     "image1.jpg": {"description": "A cat sitting on a mat", "label": "cat"},
+            ...     "image2.jpg": {"description": "A dog playing with a ball", "label": "dog"}
+            ... }
+            >>> embeddings_df = get_description_embeddings(
+            ...     descriptions=descriptions,
+            ...     embedding_model="text-embedding-ada-002",
+            ...     api_key="your_api_key"
+            ... )
+            >>> print(embeddings_df)
+                   image               description                                           embedding label
+            0  image1.jpg  A cat sitting on a mat  [[0.1, 0.2, 0.3, ...], [0.4, 0.5, 0.6, ...]]   cat
+            1  image2.jpg  A dog playing with a ball  [[0.7, 0.8, 0.9, ...], [0.1, 0.2, 0.3, ...]]   dog
+        """
     OPENAI_MODELS = {'text-embedding-ada-002', 'text-embedding-3-small', 'text-embedding-3-large'}
     results = descriptions.copy()
 
@@ -234,9 +262,32 @@ def aggregate_embeddings(embedding_list):
 def classify_with_logreg(dataset: pd.DataFrame, X_train,
                          logreg_model: LogisticRegression) -> (pd.DataFrame, pd.DataFrame):
     """
-    Use logistic regression to classify the instances and get feature weights.
-    Maintains the original logic, focusing on improved readability.
-    """
+        Use logistic regression to classify the instances and get feature weights.
+
+        Args:
+            dataset (pd.DataFrame): DataFrame containing descriptions, embeddings, and labels.
+            X_train (np.ndarray): Training data embeddings.
+            logreg_model (LogisticRegression): Pre-trained logistic regression model.
+
+        Returns:
+            tuple: A tuple containing:
+                - pd.DataFrame: AOPC DataFrame.
+                - pd.DataFrame: Updated dataset with feature importance and sorted words.
+
+        Example:
+            >>> from sklearn.linear_model import LogisticRegression
+            >>> from smer_visual.smer_visual import classify_with_logreg
+            >>> dataset = pd.DataFrame({
+            ...     "description": ["A cat sitting on a mat", "A dog playing with a ball"],
+            ...     "embedding": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
+            ...     "label": ["cat", "dog"]
+            ... })
+            >>> X_train = np.random.rand(2, 3)
+            >>> logreg_model = LogisticRegression()
+            >>> aopc_df, updated_dataset = classify_with_logreg(dataset, X_train, logreg_model)
+            >>> print(aopc_df)
+            >>> print(updated_dataset)
+        """
     dataset['feature_importance'] = None  # Initialize column
     dataset['sorted_words_by_importance'] = None
 
@@ -298,9 +349,20 @@ def classify_with_logreg(dataset: pd.DataFrame, X_train,
 
 def compute_aopc(df, top_words, max_k, logreg_model):
     """
-    Remove up to K of the specified `top_words` from each text
-    and measure probability drop of the original predicted class.
-    """
+      Plot AOPC curves for SMER and LIME importance scores.
+
+      Args:
+          df_aopc (pd.DataFrame): DataFrame containing descriptions and embeddings.
+          logreg_model (LogisticRegression): Pre-trained logistic regression model.
+          max_k (int): Maximum number of words to remove.
+
+      Returns:
+          None: Displays the plot.
+
+      Example:
+          >>> from smer_visual.smer_visual import plot_aopc
+          >>> plot_aopc(df_aopc, logreg_model, max_k=6)
+      """
     avg_drops = []
     for K in range(0, max_k + 1):
         drops = []
@@ -355,13 +417,19 @@ def build_custom_predict(row, logreg_model):
 
 def plot_aopc(df_aopc, logreg_model, max_k=6):
     """
-    A single function that:
-      1) Computes SMER importances for each row in df_AOPC.
-      2) Computes LIME importances for each row in df_AOPC.
-      3) Aggregates them globally to find top 20 words.
-      4) Computes AOPC by removing up to K of these words from each text.
-      5) Plots the resulting AOPC curves for SMER and LIME.
+    Plot AOPC curves for SMER and LIME importance scores.
 
+    Args:
+        df_aopc (pd.DataFrame): DataFrame containing descriptions and embeddings.
+        logreg_model (LogisticRegression): Pre-trained logistic regression model.
+        max_k (int): Maximum number of words to remove.
+
+    Returns:
+        None: Displays the plot.
+
+    Example:
+        >>> from smer_visual.smer_visual import plot_aopc
+        >>> plot_aopc(df_aopc, logreg_model, max_k=6)
     """
     # SMER importance score calculation
     smer_rows = []
@@ -456,26 +524,32 @@ def plot_aopc(df_aopc, logreg_model, max_k=6):
 
 
 def plot_important_words(dataset):
-    """"""
-    # Initialize a list to store the most important words
+    """
+     Plot the top 10 most important words across images.
+
+     Args:
+         dataset (pd.DataFrame): DataFrame containing sorted words by importance.
+
+     Returns:
+         None: Displays the plot.
+
+     Example:
+         >>> from smer_visual.smer_visual import plot_important_words
+         >>> plot_important_words(dataset)
+    """
     most_important_words = []
 
-    # Extract the most important word from each row
     for idx in range(len(dataset)):
-        # Extract the first word from the 'Sorted_Words' column
         sorted_words = dataset.at[idx, 'sorted_words_by_importance_processed']
         if sorted_words:
             most_important_word = sorted_words.split(',')[0].lower()
             most_important_words.append(most_important_word)
 
-    # Create a DataFrame to count occurrences of each most important word
     importance_word_counts = pd.Series(most_important_words).value_counts().reset_index()
     importance_word_counts.columns = ['Word', 'Count']
 
-    # Get the top 10 most important words
     top_10_words = importance_word_counts.head(10)
 
-    # Plotting the top 10 results
     plt.figure(figsize=(12, 8))
     sns.barplot(data=top_10_words, x='Word', y='Count', palette='viridis', hue='Count')
     plt.title('Top 10 Most Important Words Across Images')
@@ -484,14 +558,27 @@ def plot_important_words(dataset):
     plt.xticks(rotation=45)
     plt.tight_layout()
 
-    # Show plot
     plt.show()
 
 
 def _predict_proba_for_text(text, row, logreg_model):
     """
-    Reconstructs embeddings from row['Embedding'] for the words present in `text`,
-    then uses mean pooling + logreg_model.predict_proba().
+    Predict probabilities for a given text using logistic regression.
+
+    Args:
+        text (str): Text description.
+        row (pd.Series): Row containing embeddings and labels.
+        logreg_model (LogisticRegression): Pre-trained logistic regression model.
+
+    Returns:
+        np.ndarray: Predicted probabilities.
+
+    Example:
+        >>> from smer_visual.smer_visual import _predict_proba_for_text
+        >>> text = "A cat sitting on a mat"
+        >>> row = dataset.iloc[0]
+        >>> probs = _predict_proba_for_text(text, row, logreg_model)
+        >>> print(probs)
     """
     original_tokens = row['description'].split()
     word_to_index = {w: i for i, w in enumerate(original_tokens)}
