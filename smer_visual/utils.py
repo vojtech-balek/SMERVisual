@@ -31,11 +31,6 @@ def _encode_image(image_path: str):
     return base64.b64encode(image_data).decode('utf-8')
 
 
-def _aggregate_embeddings(embedding_list):
-    """Flatten the list of lists and take the mean along the axis"""
-    return np.mean(np.array(embedding_list), axis=0)
-
-
 def _preprocess_text(text: str) -> str:
     """
     Preprocess the image descriptions.

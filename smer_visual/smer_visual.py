@@ -131,7 +131,7 @@ def get_description_embeddings(
         descriptions: dict,
         embedding_model: Union[str, Path],
         api_key: Optional[str] = None,
-) -> dict:
+) -> pd.DataFrame:
     """
     Generate embeddings for image descriptions using either OpenAI or local models.
 
@@ -141,64 +141,68 @@ def get_description_embeddings(
         api_key: OpenAI API key (required for OpenAI embeddings)
 
     Returns:
-        Dictionary with the same structure as input, plus embeddings:
-        - 'embedding': Non-aggregated embeddings
-        - 'aggregated_embedding': Aggregated embeddings
+        Pandas DataFrame with columns: image, description, embedding, label
     """
-    OPENAI_MODELS = {'text-embedding-ada-002'}
+    OPENAI_MODELS = {'text-embedding-ada-002', 'text-embedding-3-small', 'text-embedding-3-large'}
     results = descriptions.copy()
 
     def process_with_openai(client: OpenAI) -> None:
+        """
+        Generate embeddings for each word in the description using OpenAI API.
+        """
         for file_path in results:
             if results[file_path]['description']:
                 try:
-                    response = client.embeddings.create(
-                        input=results[file_path]['description'],
-                        model=embedding_model
-                    )
-                    embeddings = response.data[0].embedding
+                    sentence = results[file_path]['description']
+                    embeddings = []
+
+                    # Generate embeddings for each word in the sentence
+                    for word in sentence.split():
+                        response = client.embeddings.create(
+                            input=word,
+                            model=embedding_model
+                        )
+                        word_embedding = response.data[0].embedding
+                        embeddings.append(word_embedding)
+
                     results[file_path]['embedding'] = embeddings
-                    results[file_path]['aggregated_embedding'] = _aggregate_embeddings([embeddings])
                 except Exception as e:
                     results[file_path]['embedding'] = None
-                    results[file_path]['aggregated_embedding'] = None
                     results[file_path]['error'] = f"Embedding error: {str(e)}"
             else:
                 results[file_path]['embedding'] = None
-                results[file_path]['aggregated_embedding'] = None
 
     def process_with_local_model() -> None:
+        """
+        Generate embeddings for each word in the description using a local model.
+        """
         try:
             tokenizer = AutoTokenizer.from_pretrained(embedding_model)
             model = AutoModel.from_pretrained(embedding_model)
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             model.to(device)
 
             for file_path in results:
                 if results[file_path]['description']:
                     try:
-                        inputs = tokenizer(
-                            results[file_path]['description'],
-                            return_tensors='pt',
-                            padding=True,
-                            truncation=True,
-                            max_length=512
-                        )
-                        inputs = {k: v.to(device) for k, v in inputs.items()}
+                        sentence = results[file_path]['description']
+                        embeddings = []
 
-                        with torch.no_grad():
-                            outputs = model(**inputs)
+                        # Generate embeddings for each word in the sentence
+                        for word in sentence.split():
+                            inputs = tokenizer(word, return_tensors='pt', padding=True, truncation=True, max_length=512)
+                            inputs = {key: value.to(device) for key, value in inputs.items()}  # Move inputs to GPU
+                            with torch.no_grad():
+                                outputs = model(**inputs)
+                            # Get the embeddings from the [CLS] token
+                            embeddings.append(np.squeeze(outputs.last_hidden_state[:, 0, :].cpu().numpy()))  # Move embeddings back to CPU
 
-                        embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()[0]
                         results[file_path]['embedding'] = embeddings
-                        results[file_path]['aggregated_embedding'] = _aggregate_embeddings([embeddings])
                     except Exception as e:
                         results[file_path]['embedding'] = None
-                        results[file_path]['aggregated_embedding'] = None
                         results[file_path]['error'] = f"Embedding error: {str(e)}"
                 else:
                     results[file_path]['embedding'] = None
-                    results[file_path]['aggregated_embedding'] = None
 
         except Exception as e:
             raise ValueError(f"Error initializing local model: {str(e)}")
@@ -210,7 +214,21 @@ def get_description_embeddings(
     else:
         process_with_local_model()
 
-    return results
+    data = []
+    for file_path, values in results.items():
+        data.append({
+            "image": file_path,
+            "description": values.get("description"),
+            "embedding": values.get("embedding"),
+            "label": values.get("label")
+        })
+
+    return pd.DataFrame(data)
+
+
+def aggregate_embeddings(embedding_list):
+    """Flatten the list of lists and take the mean along the axis"""
+    return np.mean(np.array(embedding_list), axis=0)
 
 
 def classify_with_logreg(dataset: pd.DataFrame, X_train,
@@ -224,15 +242,15 @@ def classify_with_logreg(dataset: pd.DataFrame, X_train,
 
     # Compute importance of each word in the description
     for idx in range(len(dataset)):
-        description = dataset.Description[idx]
+        description = dataset.description[idx]
         words = description.split()
 
         # Compute the aggregated embedding for the full description
-        word_embeddings = [dataset['Embedding'].iloc[idx][i] for i in range(len(words)) if words[i] in words]
+        word_embeddings = [dataset['embedding'].iloc[idx][i] for i in range(len(words)) if words[i] in words]
         if word_embeddings:
             original_agg_emb = np.mean(word_embeddings, axis=0)
         else:
-            original_agg_emb = np.zeros_like(dataset['Embedding'].iloc[idx][0])
+            original_agg_emb = np.zeros_like(dataset['embedding'].iloc[idx][0])
 
         # Predict probability with all words
         original_prob = logreg_model.predict_proba(np.array([original_agg_emb]))[0]
@@ -243,7 +261,7 @@ def classify_with_logreg(dataset: pd.DataFrame, X_train,
             perturbed_text = ' '.join(w for w in words if w != word)
             perturbed_words = perturbed_text.split()
             perturbed_embeddings = [
-                dataset['Embedding'].iloc[idx][i]
+                dataset['embedding'].iloc[idx][i]
                 for i in range(len(perturbed_words))
                 if perturbed_words[i] in perturbed_words
             ]
@@ -251,20 +269,20 @@ def classify_with_logreg(dataset: pd.DataFrame, X_train,
             if perturbed_embeddings:
                 perturbed_agg_emb = np.mean(perturbed_embeddings, axis=0)
             else:
-                perturbed_agg_emb = np.zeros_like(dataset['Embedding'].iloc[idx][0])
+                perturbed_agg_emb = np.zeros_like(dataset['embedding'].iloc[idx][0])
 
             perturbed_prob = logreg_model.predict_proba(np.array([perturbed_agg_emb]))[0]
             drop = original_prob - perturbed_prob
-            class_index = logreg_model.classes_.tolist().index(dataset.Label[idx])
+            class_index = logreg_model.classes_.tolist().index(dataset.label[idx])
             importance_scores[word] = drop[class_index]
 
         # Store sorted importance
         sorted_importance = sorted(importance_scores.items(), key=lambda x: x[1], reverse=True)
-        dataset.at[idx, 'Feature_Importance'] = ','.join(f"{w}: {s:.4f}" for w, s in sorted_importance)
-        dataset.at[idx, 'Sorted_Words_by_Importance'] = ','.join([w for w, _ in sorted_importance])
+        dataset.at[idx, 'feature_importance'] = ','.join(f"{w}: {s:.4f}" for w, s in sorted_importance)
+        dataset.at[idx, 'sorted_words_by_importance'] = ','.join([w for w, _ in sorted_importance])
 
     # Preprocess sorted words for the specified range
-    dataset['Sorted_Words_by_Importance_processed'] = dataset['Sorted_Words_by_Importance'].apply(_preprocess_text)
+    dataset['sorted_sords_by_importance_processed'] = dataset['sorted_words_by_importance'].apply(_preprocess_text)
 
     # Split final outputs as in the original code
     df_aopc = dataset[X_train.shape[0] + 1:].reset_index(drop=True)
@@ -280,7 +298,7 @@ def compute_aopc(df, top_words, max_k, logreg_model):
     for K in range(0, max_k + 1):
         drops = []
         for idx2, row2 in df.iterrows():
-            text2 = row2['Description']
+            text2 = row2['description']
             original_probs2 = _predict_proba_for_text(text2, row2, logreg_model)
             original_class2 = np.argmax(original_probs2)
             original_prob2 = original_probs2[original_class2]
@@ -313,16 +331,16 @@ def build_custom_predict(row, logreg_model):
     """
     def predict_for_lime(texts):
         emb_list = []
-        original_tokens = row['Description'].split()
+        original_tokens = row['description'].split()
         word_to_index = {w: i for i, w in enumerate(original_tokens)}
 
         for t in texts:
             t_words = t.split()
             valid_indices = [word_to_index[x] for x in t_words if x in word_to_index]
             if len(valid_indices) > 0:
-                emb = np.mean([np.array(row['Embedding'][ix]) for ix in valid_indices], axis=0)
+                emb = np.mean([np.array(row['embedding'][ix]) for ix in valid_indices], axis=0)
             else:
-                emb = np.zeros(len(row['Embedding'][0]))
+                emb = np.zeros(len(row['embedding'][0]))
             emb_list.append(emb)
         return logreg_model.predict_proba(emb_list)
     return predict_for_lime
@@ -341,7 +359,7 @@ def plot_aopc(df_aopc, logreg_model, max_k=6):
     # SMER importance score calculation
     smer_rows = []
     for idx, row in tqdm(df_aopc.iterrows(), total=len(df_aopc), desc="Computing SMER importances"):
-        text = row['Description']
+        text = row['description']
         original_probs = _predict_proba_for_text(text, row, logreg_model)
         original_class = np.argmax(original_probs)
         original_prob = original_probs[original_class]
@@ -363,7 +381,7 @@ def plot_aopc(df_aopc, logreg_model, max_k=6):
 
     smer_df = pd.DataFrame(smer_rows)
     if 'Label' in df_aopc.columns:
-        class_names = df_aopc['Label'].unique().tolist()
+        class_names = df_aopc['label'].unique().tolist()
     else:
         class_names = []
 
@@ -373,7 +391,7 @@ def plot_aopc(df_aopc, logreg_model, max_k=6):
     lime_rows = []
 
     for idx, row in tqdm(df_aopc.iterrows(), total=len(df_aopc), desc="Computing LIME importances"):
-        text = row['Description']
+        text = row['description']
         lime_predict_fn = build_custom_predict(row, logreg_model)
 
         # Explain instance
@@ -438,7 +456,7 @@ def plot_important_words(dataset):
     # Extract the most important word from each row
     for idx in range(len(dataset)):
         # Extract the first word from the 'Sorted_Words' column
-        sorted_words = dataset.at[idx, 'Sorted_Words_by_Importance_processed']
+        sorted_words = dataset.at[idx, 'sorted_words_by_importance_processed']
         if sorted_words:
             most_important_word = sorted_words.split(',')[0].lower()
             most_important_words.append(most_important_word)
@@ -462,21 +480,22 @@ def plot_important_words(dataset):
     # Show plot
     plt.show()
 
+
 def _predict_proba_for_text(text, row, logreg_model):
     """
     Reconstructs embeddings from row['Embedding'] for the words present in `text`,
     then uses mean pooling + logreg_model.predict_proba().
     """
-    original_tokens = row['Description'].split()
+    original_tokens = row['description'].split()
     word_to_index = {w: i for i, w in enumerate(original_tokens)}
 
     text_words = text.split()
     valid_indices = [word_to_index[w] for w in text_words if w in word_to_index]
 
     if len(valid_indices) > 0:
-        emb = np.mean([np.array(row['Embedding'][ix]) for ix in valid_indices], axis=0)
+        emb = np.mean([np.array(row['embedding'][ix]) for ix in valid_indices], axis=0)
     else:
-        emb = np.zeros(len(row['Embedding'][0]))
+        emb = np.zeros(len(row['embedding'][0]))
 
     probs = logreg_model.predict_proba([emb])[0]
     return probs
