@@ -36,7 +36,7 @@ The `BoundingBoxGenerator` class enhances model interpretability by overlaying b
 Here's a simple way to use **SMERVisual** for explainable image classification:
 
 ```python
-from src import ImageClassifier, BoundingBoxGenerator
+from smer_visual import ImageClassifier, BoundingBoxGenerator
 
 # Initialize and train the classifier
 classifier = ImageClassifier(openai_model="openai", openai_key='123abc123')

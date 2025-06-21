@@ -1,4 +1,4 @@
-"""src.py"""
+"""smer_visual.py"""
 from pathlib import Path
 from tkinter import Image
 import pandas as pd
@@ -44,7 +44,7 @@ def image_description(
             dict: Dictionary mapping file paths to their descriptions, labels, and errors.
 
         Example:
-            >>> from src.smer_visual import image_description
+            >>> from smer_visual.smer_visual import image_description
             >>> descriptions = image_description(
             ...     model="gpt-4o-mini",
             ...     data_folder="images/",
@@ -156,7 +156,7 @@ def get_description_embeddings(
             pd.DataFrame: Pandas DataFrame with columns: image, description, embedding, label.
 
         Example:
-            >>> from src.smer_visual import get_description_embeddings
+            >>> from smer_visual.smer_visual import get_description_embeddings
             >>> descriptions = {
             ...     "image1.jpg": {"description": "A cat sitting on a mat", "label": "cat"},
             ...     "image2.jpg": {"description": "A dog playing with a ball", "label": "dog"}
@@ -276,7 +276,7 @@ def classify_with_logreg(dataset: pd.DataFrame, X_train,
 
         Example:
             >>> from sklearn.linear_model import LogisticRegression
-            >>> from src.smer_visual import classify_with_logreg
+            >>> from smer_visual.smer_visual import classify_with_logreg
             >>> dataset = pd.DataFrame({
             ...     "description": ["A cat sitting on a mat", "A dog playing with a ball"],
             ...     "embedding": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
@@ -360,7 +360,7 @@ def compute_aopc(df, top_words, max_k, logreg_model):
           None: Displays the plot.
 
       Example:
-          >>> from src.smer_visual import plot_aopc
+          >>> from smer_visual.smer_visual import plot_aopc
           >>> plot_aopc(df_aopc, logreg_model, max_k=6)
       """
     avg_drops = []
@@ -428,7 +428,7 @@ def plot_aopc(df_aopc, logreg_model, max_k=6):
         None: Displays the plot.
 
     Example:
-        >>> from src.smer_visual import plot_aopc
+        >>> from smer_visual.smer_visual import plot_aopc
         >>> plot_aopc(df_aopc, logreg_model, max_k=6)
     """
     # SMER importance score calculation
@@ -534,7 +534,7 @@ def plot_important_words(dataset):
          None: Displays the plot.
 
      Example:
-         >>> from src.smer_visual import plot_important_words
+         >>> from smer_visual.smer_visual import plot_important_words
          >>> plot_important_words(dataset)
     """
     most_important_words = []
@@ -574,7 +574,7 @@ def _predict_proba_for_text(text, row, logreg_model):
         np.ndarray: Predicted probabilities.
 
     Example:
-        >>> from src.smer_visual import _predict_proba_for_text
+        >>> from smer_visual.smer_visual import _predict_proba_for_text
         >>> text = "A cat sitting on a mat"
         >>> row = dataset.iloc[0]
         >>> probs = _predict_proba_for_text(text, row, logreg_model)
