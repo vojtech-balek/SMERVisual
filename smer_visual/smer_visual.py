@@ -2,25 +2,18 @@
 from pathlib import Path
 from tkinter import Image
 import pandas as pd
-import base64
 from sklearn.linear_model import LogisticRegression
 import numpy as np
 import torch
 from openai import OpenAI
 from transformers import AutoTokenizer, AutoModel
 from transformers import MllamaForConditionalGeneration, AutoProcessor
-import os
-from sklearn.model_selection import train_test_split
-import re
-import spacy
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
 from lime.lime_text import LimeTextExplainer
 from PIL import Image
-import cv2
-from typing import Union, Optional, List
-from os import PathLike
+from typing import Union, Optional
 
 from utils import _get_image_files_with_class, _encode_image, _aggregate_embeddings, _preprocess_text
 

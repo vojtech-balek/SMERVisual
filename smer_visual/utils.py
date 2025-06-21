@@ -23,7 +23,7 @@ def _get_image_files_with_class(folder_path):
 def _encode_image(image_path: str):
     """
     Encode image to a base64 representation.
-    :param image_path: Path to an aimage.
+    :param image_path: Path to an image.
     :type image_path: str
     :return: base64 representation of the image
     """

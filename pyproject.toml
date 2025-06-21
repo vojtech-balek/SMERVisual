@@ -16,7 +16,6 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 dependencies = [
-    "base64",
     "opencv-python==4.11.0.86",
     "matplotlib==3.9.2",
     "numpy==1.26.4",
