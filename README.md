@@ -44,7 +44,7 @@ classifier(data="path/to/dataset")
 influential_words = classifier.get_top_words()
 
 # Generate bounding boxes for top words
-bbox_generator = BoundingBoxGenerator(data='path/to/dataset', top_words = influential_words, 
+bbox_generator = BoundingBoxGenerator(data='path/to/dataset', top_words=influential_words,
                                       local_model_path='path/to/local/model')
 bbox_generator()
 ```
