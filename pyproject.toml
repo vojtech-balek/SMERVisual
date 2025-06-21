@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smer-visual"
-version = "0.0.3"
+version = "1.0.0"
 authors = [
     { name = "Vojtěch Balek", email = "vojta.balek@gmail.com" },
     { name = "Julija Jeršova", email = "poty01@vse.cz"},
@@ -16,19 +16,20 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 dependencies = [
-    "pandas==2.2.3",
-    "numpy==1.26.4",
-    "scikit-learn",
-    "torch==2.4.1",
-    "openai==1.52.2",
-    "transformers==4.48.0",
-    "spacy==3.8.2",
+    "base64",
+    "opencv-python==4.11.0.86",
     "matplotlib==3.9.2",
+    "numpy==1.26.4",
+    "pandas==2.2.3",
+    "Pillow==11.1.0",
     "seaborn==0.13.2",
-    "tqdm==4.65.0",
-    "lime",
-    "Pillow",
-    "opencv-python"
+    "scikit-learn==1.6.1",
+    "spacy==3.8.2",
+    "torch==2.4.1",
+    "tqdm==4.67.1",
+    "transformers==4.48.0",
+    "openai==1.52.2",
+    "lime==0.2.0.1"
 ]
 
 

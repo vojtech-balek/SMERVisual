@@ -4,6 +4,7 @@ import numpy as np
 import spacy
 import re
 
+
 def _get_image_files_with_class(folder_path):
     """Load images with labels based on their parent directory name.
     :param folder_path: path to directory subfolders with images
