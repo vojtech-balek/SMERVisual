@@ -127,4 +127,3 @@ Contributions are welcome. If you’d like to contribute, follow these steps:
 SMERVisual is released under the **MIT License**.
 
 ---
-```
