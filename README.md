@@ -69,7 +69,7 @@ embeddings_df["aggregated_embedding"] = embeddings_df["embedding"].apply(aggrega
 X_train = np.stack(embeddings_df["aggregated_embedding"].values)
 y_train = embeddings_df["label"]
 
-# Train logistic regression model
+# Train a logistic regression model
 logreg_model = LogisticRegression()
 logreg_model.fit(X_train, y_train)
 
@@ -127,4 +127,3 @@ Contributions are welcome. If you’d like to contribute, follow these steps:
 SMERVisual is released under the **MIT License**.
 
 ---
-```
