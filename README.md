@@ -1,6 +1,6 @@
 # **SMERVisual**
 
-SMERVisual is a Python package designed for explainable machine learning using the **SMER method**. It provides an intuitive interface for analyzing image classification models by highlighting key features and generating bounding boxes around important words in source images.
+SMERVisual is a Python package designed for explainable machine learning using the **Self Model Entities Related (SMER) method**. It provides tools for explainable classification of images with **LLM-generated text descriptions**, which are then analyzed using the SMER explanation technique.
 
 The package supports both **OpenAI API** models and **local language models**, offering flexibility in model selection.
 
@@ -16,36 +16,88 @@ pip install smer-visual
 
 ## **Features**
 
-### **ImageClassifier**
-The `ImageClassifier` class performs **logistic regression-based classification** on image datasets while computing **LIME** and **SMER** values for explainability. Key features include:
+### **Image Description**
+The `image_description` function generates text descriptions for images using either OpenAI models or local language models. Key features include:
+- Support for OpenAI models like `gpt-4o-mini` and local models.
+- Customizable prompts for generating concise and informative descriptions.
 
-- Classification of image datasets using pre-trained language models
-- Computation of **LIME and SMER scores** for each word in the dataset
-- Visualization of **most important words** for explainability
+### **Description Embeddings**
+The `get_description_embeddings` function computes embeddings for image descriptions using OpenAI or local models. 
 
-### **BoundingBoxGenerator**
-The `BoundingBoxGenerator` class enhances model interpretability by overlaying bounding boxes on images, highlighting **critical words** identified in classification. It:
+### **Explainable Classification**
+The `classify_with_logreg` function performs logistic regression-based classification on image datasets while computing **SMER** values for explainability. Key features include:
+- Aggregation of embeddings for classification.
+- Computation of feature importance for each word in the description.
+- Support for **AOPC (Area Over the Perturbation Curve)** analysis.
 
-- Uses **ImageClassifier output** to detect significant words
-- Supports **vision models from OpenAI** and **open-source alternatives**
-- Enables **zero-shot object detection** for explainable AI
+### **Visualization**
+- **Important Words**: The `plot_important_words` function visualizes the most important words across images.
+- **AOPC Curves**: The `plot_aopc` function compares the explainability of SMER and LIME methods by plotting AOPC curves.
+- **Bounding Boxes**: The `BoundingBoxGenerator` class overlays bounding boxes on images, highlighting critical words identified in classification.
 
 ---
 
 ## **Usage Example**
-Here's a simple way to use **SMERVisual** for explainable image classification:
 
+### **Image Description and Embeddings**
 ```python
-from smer_visual import ImageClassifier, BoundingBoxGenerator
+from smer_visual.smer import image_description, get_description_embeddings
 
-# Initialize and train the classifier
-classifier = ImageClassifier(openai_model="openai", openai_key='123abc123')
-classifier(data="path/to/dataset")
-influential_words = classifier.get_top_words()
+# Generate image descriptions
+descriptions = image_description(
+    model="gpt-4o-mini",
+    data_folder="path/to/images",
+    api_key="your_openai_api_key"
+)
+
+# Generate embeddings for descriptions
+embeddings_df = get_description_embeddings(
+    descriptions=descriptions,
+    embedding_model="text-embedding-ada-002",
+    api_key="your_openai_api_key"
+)
+```
+
+### **Explainable Classification**
+```python
+from smer_visual.smer import classify_with_logreg, aggregate_embeddings
+from sklearn.linear_model import LogisticRegression
+import numpy as np
+
+# Prepare data
+embeddings_df["aggregated_embedding"] = embeddings_df["embedding"].apply(aggregate_embeddings)
+X_train = np.stack(embeddings_df["aggregated_embedding"].values)
+y_train = embeddings_df["label"]
+
+# Train logistic regression model
+logreg_model = LogisticRegression()
+logreg_model.fit(X_train, y_train)
+
+# Perform classification and compute feature importance
+aopc_df, updated_dataset = classify_with_logreg(embeddings_df, X_train, logreg_model)
+```
+
+### **Visualization**
+```python
+from smer_visual.smer import plot_important_words, plot_aopc
+
+# Plot important words
+plot_important_words(updated_dataset)
+
+# Plot AOPC curves
+plot_aopc(aopc_df, logreg_model, max_k=5)
+```
+
+### **Bounding Box Generation**
+```python
+from smer_visual.bounding_boxes import BoundingBoxGenerator
 
 # Generate bounding boxes for top words
-bbox_generator = BoundingBoxGenerator(data='path/to/dataset', top_words=influential_words,
-                                      local_model_path='path/to/local/model')
+bbox_generator = BoundingBoxGenerator(
+    data="path/to/images",
+    top_words=["cat", "dog"],
+    local_model_path="path/to/local/model"
+)
 bbox_generator()
 ```
 
@@ -53,21 +105,21 @@ bbox_generator()
 
 ## **Why Use SMERVisual?**
 
-- **Explainable AI** – Provides insight into model decision-making
-- **Model-Agnostic** – Compatible with OpenAI APIs and open-source models
-- **Zero-Shot Detection** – No additional training data required
-- **Easy Integration** – Simple API for seamless use with existing machine learning workflows
+- **Explainable AI** – Provides insight into model decision-making.
+- **Model-Agnostic** – Compatible with OpenAI APIs and open-source models.
+- **Zero-Shot Detection** – No additional training data required.
+- **Easy Integration** – Simple API for seamless use with existing machine learning workflows.
 
 ---
 
 ## **Contributing**
 Contributions are welcome. If you’d like to contribute, follow these steps:
 
-1. Fork the repository
-2. Create a new branch (`git checkout -b feature-branch`)
-3. Commit changes (`git commit -m "Add new feature"`)
-4. Push to the branch (`git push origin feature-branch`)
-5. Open a pull request
+1. Fork the repository.
+2. Create a new branch (`git checkout -b feature-branch`).
+3. Commit changes (`git commit -m "Add new feature"`).
+4. Push to the branch (`git push origin feature-branch`).
+5. Open a pull request.
 
 ---
 
@@ -75,3 +127,4 @@ Contributions are welcome. If you’d like to contribute, follow these steps:
 SMERVisual is released under the **MIT License**.
 
 ---
+```

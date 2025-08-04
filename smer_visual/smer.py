@@ -18,7 +18,7 @@ from typing import Union, Optional
 from .utils import _get_image_files_with_class, _encode_image, _preprocess_text
 
 
-def image_description(
+def image_descriptions(
         model: Union[str, Path],
         data_folder: Union[str, Path],
         api_key: Optional[str] = None,
@@ -42,13 +42,13 @@ def image_description(
             ...     model="gpt-4o-mini",
             ...     data_folder="images/",
             ...     api_key="your_api_key",
-            ...     user_prompt="Describe this image in 7 words."
+            ...     user_prompt="Describe this image in 7 words. Be concise, try to maximize the information about the objects in this image."
             ... )
             >>> print(descriptions)
             {'image1.jpg': {'label': 'cat', 'description': 'A cat sitting on a mat', 'error': None},
              'image2.jpg': {'label': 'dog', 'description': 'A dog playing with a ball', 'error': None}}
         """
-    OPENAI_MODELS = {'gpt-4o-mini', '4o', 'o3', 'o3-mini', 'o3-pro', 'o1-pro'}
+    OPENAI_MODELS = {'gpt-4o-mini', '4o', 'o3', 'o3-mini', 'o3-pro', 'o1-pro', '4.1'}
 
     def process_with_openai(client: OpenAI) -> dict:
         results = {}
@@ -132,7 +132,7 @@ def image_description(
         return process_with_local_model()
 
 
-def get_description_embeddings(
+def embed_descriptions(
         descriptions: dict,
         embedding_model: Union[str, Path],
         api_key: Optional[str] = None,
@@ -149,12 +149,12 @@ def get_description_embeddings(
             pd.DataFrame: Pandas DataFrame with columns: image, description, embedding, label.
 
         Example:
-            >>> from smer_visual.smer_visual import get_description_embeddings
+            >>> from smer_visual.smer_visual import embed_descriptions
             >>> descriptions = {
             ...     "image1.jpg": {"description": "A cat sitting on a mat", "label": "cat"},
             ...     "image2.jpg": {"description": "A dog playing with a ball", "label": "dog"}
             ... }
-            >>> embeddings_df = get_description_embeddings(
+            >>> embeddings_df = embed_descriptions(
             ...     descriptions=descriptions,
             ...     embedding_model="text-embedding-ada-002",
             ...     api_key="your_api_key"
@@ -252,7 +252,7 @@ def aggregate_embeddings(embedding_list):
     return np.mean(np.array(embedding_list), axis=0)
 
 
-def classify_with_logreg(dataset: pd.DataFrame, X_train,
+def classify_lr(dataset: pd.DataFrame, X_train,
                          logreg_model: LogisticRegression) -> (pd.DataFrame, pd.DataFrame):
     """
         Use logistic regression to classify the instances and get feature weights.
@@ -269,7 +269,7 @@ def classify_with_logreg(dataset: pd.DataFrame, X_train,
 
         Example:
             >>> from sklearn.linear_model import LogisticRegression
-            >>> from smer_visual.smer_visual import classify_with_logreg
+            >>> from smer_visual.smer_visual import classify_lr
             >>> dataset = pd.DataFrame({
             ...     "description": ["A cat sitting on a mat", "A dog playing with a ball"],
             ...     "embedding": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]],
@@ -277,7 +277,7 @@ def classify_with_logreg(dataset: pd.DataFrame, X_train,
             ... })
             >>> X_train = np.random.rand(2, 3)
             >>> logreg_model = LogisticRegression()
-            >>> aopc_df, updated_dataset = classify_with_logreg(dataset, X_train, logreg_model)
+            >>> aopc_df, updated_dataset = classify_lr(dataset, X_train, logreg_model)
             >>> print(aopc_df)
             >>> print(updated_dataset)
         """
