@@ -12,9 +12,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
 from lime.lime_text import LimeTextExplainer
-from PIL import Image
 from typing import Union, Optional
-
+from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
+from PIL import Image, ImageDraw, ImageFont
 from .utils import _get_image_files_with_class, _encode_image, _preprocess_text
 
 
@@ -524,7 +524,7 @@ def plot_important_words(dataset):
          dataset (pd.DataFrame): DataFrame containing sorted words by importance.
 
      Returns:
-         None: Displays the plot.
+         dataset (pd.DataFrame): DataFrame with top 10 important words and their counts.
 
      Example:
          >>> from smer_visual.smer_visual import plot_important_words
@@ -539,7 +539,7 @@ def plot_important_words(dataset):
             most_important_words.append(most_important_word)
 
     importance_word_counts = pd.Series(most_important_words).value_counts().reset_index()
-    importance_word_counts.columns = ['Word', 'Count']
+    importance_word_counts.columns = ['word', 'count']
 
     top_10_words = importance_word_counts.head(10)
 
@@ -552,37 +552,124 @@ def plot_important_words(dataset):
     plt.tight_layout()
 
     plt.show()
+    return top_10_words
+
+def _bounding_boxes(image_path: str,
+                    df_top_words: pd.DataFrame,
+                    model_id: str,
+                    device = 'cuda' if torch.cuda.is_available() else 'cpu',
+                    box_threshold=0.4,
+                    text_threshold=0.3):
+    processor = AutoProcessor.from_pretrained(model_id)
+    model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
+    image = Image.open(image_path)
+    text = ". ".join(df_top_words['word'].tolist())
+    inputs = processor(images=image, text=text, return_tensors="pt").to(device)
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    results = processor.post_process_grounded_object_detection(
+        outputs,
+        inputs.input_ids,
+        box_threshold=box_threshold,
+        text_threshold=text_threshold,
+        target_sizes=[image.size[::-1]]
+    )
+    # Extract the result for the first image
+    result = results[0]
+    boxes = result["boxes"]
+    scores = result["scores"]
+    labels = result["labels"]
+
+    # Create a copy of the image for drawing
+    image_with_boxes = image.copy()
+    draw = ImageDraw.Draw(image_with_boxes)
+
+    # Try to get a font, use default if not available
+    try:
+        font = ImageFont.truetype("arial.ttf", 15)
+    except IOError:
+        font = ImageFont.load_default()
+
+    # Draw boxes and labels on the image
+    for box, score, label in zip(boxes, scores, labels):
+        box = box.tolist()
+        x1, y1, x2, y2 = box
+        draw.rectangle([(x1, y1), (x2, y2)], outline="red", width=3)
+        label_text = f"{label}: {score:.2f}"
+        text_size = draw.textbbox((0, 0), label_text, font=font)[2:]
+        draw.rectangle([(x1, y1 - text_size[1]), (x1 + text_size[0], y1)], fill="red")
+
+        # Draw label text
+        draw.text((x1, y1 - text_size[1]), label_text, fill="white", font=font)
+    return image_with_boxes
 
 
-def _predict_proba_for_text(text, row, logreg_model):
+def save_bounding_box_images(
+        input_path: Union[str, Path],
+        output_folder: Union[str, Path],
+        df_top_words: pd.DataFrame,
+        model_id: str = "google/owlv2-base-patch16-ensemble",
+        device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
+        box_threshold: float = 0.4,
+        text_threshold: float = 0.3
+) -> dict:
     """
-    Predict probabilities for a given text using logistic regression.
+    Process images with bounding boxes and save to output folder.
 
     Args:
-        text (str): Text description.
-        row (pd.Series): Row containing embeddings and labels.
-        logreg_model (LogisticRegression): Pre-trained logistic regression model.
+        input_path: Path to image file or directory with images
+        output_folder: Directory where annotated images will be saved
+        df_top_words: DataFrame containing important words to detect
+        model_id: Model for zero-shot object detection
+        device: Device to run model on ('cuda' or 'cpu')
+        box_threshold: Threshold for box detection
+        text_threshold: Threshold for text detection
 
     Returns:
-        np.ndarray: Predicted probabilities.
-
-    Example:
-        >>> from smer_visual.smer_visual import _predict_proba_for_text
-        >>> text = "A cat sitting on a mat"
-        >>> row = dataset.iloc[0]
-        >>> probs = _predict_proba_for_text(text, row, logreg_model)
-        >>> print(probs)
+        dict: Mapping of original image paths to saved output paths
     """
-    original_tokens = row['description'].split()
-    word_to_index = {w: i for i, w in enumerate(original_tokens)}
+    # Convert paths to Path objects
+    input_path = Path(input_path)
+    output_folder = Path(output_folder)
 
-    text_words = text.split()
-    valid_indices = [word_to_index[w] for w in text_words if w in word_to_index]
-
-    if len(valid_indices) > 0:
-        emb = np.mean([np.array(row['embedding'][ix]) for ix in valid_indices], axis=0)
+    # Create output directory if it doesn't exist
+    output_folder.mkdir(exist_ok=True, parents=True)
+    valid_exts = {".jpg", ".jpeg", ".png"}
+    if input_path.is_file():
+        print(f"Processing single file: {input_path}")
+        image_paths = [input_path]
     else:
-        emb = np.zeros(len(row['embedding'][0]))
+        print(f"Processing directory: {input_path}")
+        image_paths = [p for p in input_path.rglob("*") if p.suffix.lower() in valid_exts]
 
-    probs = logreg_model.predict_proba([emb])[0]
-    return probs
+    results = {}
+    print(f"Input path: {input_path}\n")
+    print(f"Image paths: {image_paths}")
+    for img_path in image_paths:
+        try:
+            # Process image with bounding boxes
+            image_with_boxes = _bounding_boxes(
+                image_path=str(img_path),
+                df_top_words=df_top_words,
+                model_id=model_id,
+                device=device,
+                box_threshold=box_threshold,
+                text_threshold=text_threshold
+            )
+
+            # Create output filename
+            output_path = output_folder / f"{img_path.stem}_annotated{img_path.suffix}"
+
+            # Save the annotated image
+            image_with_boxes.save(output_path)
+
+            results[str(img_path)] = str(output_path)
+            print(f"Processed: {img_path} → {output_path}")
+
+        except Exception as e:
+            print(f"Error processing {img_path}: {e}")
+            results[str(img_path)] = None
+
+    print(f"Completed! Processed {len(results)} images.")
+    return results

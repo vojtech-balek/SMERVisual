@@ -90,15 +90,16 @@ plot_aopc(aopc_df, logreg_model, max_k=5)
 
 ### **Bounding Box Generation**
 ```python
-from smer_visual.bounding_boxes import BoundingBoxGenerator
-
-# Generate bounding boxes for top words
-bbox_generator = BoundingBoxGenerator(
-    data="path/to/images",
-    top_words=["cat", "dog"],
-    local_model_path="path/to/local/model"
+from smer_visual.smer import save_bounding_box_images
+results = save_bounding_box_images(
+    input_path="data/",
+    output_folder="output",
+    df_top_words=top_words_df,
+    model_id="IDEA-Research/grounding-dino-base",
+    box_threshold = 0.5,
+    text_threshold = 0.4
 )
-bbox_generator()
+
 ```
 
 ---
