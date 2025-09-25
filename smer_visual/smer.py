@@ -251,6 +251,39 @@ def aggregate_embeddings(embedding_list):
     """Flatten the list of lists and take the mean along the axis"""
     return np.mean(np.array(embedding_list), axis=0)
 
+def _predict_proba_for_text(text, row, logreg_model):
+    """
+    Predict probabilities for a given text using logistic regression.
+
+    Args:
+        text (str): Text description.
+        row (pd.Series): Row containing embeddings and labels.
+        logreg_model (LogisticRegression): Pre-trained logistic regression model.
+
+    Returns:
+        np.ndarray: Predicted probabilities.
+
+    Example:
+        >>> from smer_visual.smer_visual import _predict_proba_for_text
+        >>> text = "A cat sitting on a mat"
+        >>> row = dataset.iloc[0]
+        >>> probs = _predict_proba_for_text(text, row, logreg_model)
+        >>> print(probs)
+    """
+    original_tokens = row['description'].split()
+    word_to_index = {w: i for i, w in enumerate(original_tokens)}
+
+    text_words = text.split()
+    valid_indices = [word_to_index[w] for w in text_words if w in word_to_index]
+
+    if len(valid_indices) > 0:
+        emb = np.mean([np.array(row['embedding'][ix]) for ix in valid_indices], axis=0)
+    else:
+        emb = np.zeros(len(row['embedding'][0]))
+
+    logits = np.dot(emb, logreg_model.coef_.T) + logreg_model.intercept_
+    probs = 1 / (1 + np.exp(-logits))
+    return probs
 
 def classify_lr(dataset: pd.DataFrame, X_train,
                          logreg_model: LogisticRegression) -> (pd.DataFrame, pd.DataFrame):
