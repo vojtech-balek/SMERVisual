@@ -255,20 +255,17 @@ def _predict_proba_for_text(text, row, logreg_model):
     """
     Predict probabilities for a given text using logistic regression.
 
+    This mimics sklearn's LogisticRegression.predict_proba:
+      - For multinomial classifiers (n_classes > 2) apply softmax to logits.
+      - For binary classifiers return [1 - p, p] where p is the sigmoid of the logit.
+
     Args:
         text (str): Text description.
         row (pd.Series): Row containing embeddings and labels.
         logreg_model (LogisticRegression): Pre-trained logistic regression model.
 
     Returns:
-        np.ndarray: Predicted probabilities.
-
-    Example:
-        >>> from smer_visual.smer_visual import _predict_proba_for_text
-        >>> text = "A cat sitting on a mat"
-        >>> row = dataset.iloc[0]
-        >>> probs = _predict_proba_for_text(text, row, logreg_model)
-        >>> print(probs)
+        np.ndarray: Predicted probabilities (shape = n_classes, sums to 1).
     """
     original_tokens = row['description'].split()
     word_to_index = {w: i for i, w in enumerate(original_tokens)}
@@ -281,9 +278,28 @@ def _predict_proba_for_text(text, row, logreg_model):
     else:
         emb = np.zeros(len(row['embedding'][0]))
 
+    # Compute logits: shape could be (n_classes,) for multinomial or (1,) for binary (sklearn stores coef_ as (1, n_features))
     logits = np.dot(emb, logreg_model.coef_.T) + logreg_model.intercept_
-    probs = 1 / (1 + np.exp(-logits))
+    logits = np.asarray(logits).ravel()
+
+    def _softmax(x: np.ndarray) -> np.ndarray:
+        x = np.asarray(x, dtype=float)
+        x_max = np.max(x)
+        ex = np.exp(x - x_max)
+        return ex / ex.sum()
+
+    # If multinomial (more than 1 row in coef_), apply softmax
+    if getattr(logreg_model, "coef_", None) is not None and logreg_model.coef_.shape[0] > 1:
+        probs = _softmax(logits)
+    else:
+        # Binary case: logits is single value -> sigmoid
+        # Ensure scalar
+        logit_val = float(logits[0]) if logits.size > 0 else 0.0
+        p = 1.0 / (1.0 + np.exp(-logit_val))
+        probs = np.array([1.0 - p, p])
+
     return probs
+
 
 def classify_lr(dataset: pd.DataFrame, X_train,
                          logreg_model: LogisticRegression) -> (pd.DataFrame, pd.DataFrame):
@@ -677,8 +693,6 @@ def save_bounding_box_images(
         image_paths = [p for p in input_path.rglob("*") if p.suffix.lower() in valid_exts]
 
     results = {}
-    print(f"Input path: {input_path}\n")
-    print(f"Image paths: {image_paths}")
     for img_path in image_paths:
         try:
             # Process image with bounding boxes
