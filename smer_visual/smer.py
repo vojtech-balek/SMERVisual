@@ -282,6 +282,7 @@ def _predict_proba_for_text(text, row, logreg_model):
     logits = np.dot(emb, logreg_model.coef_.T) + logreg_model.intercept_
     logits = np.asarray(logits).ravel()
 
+    # Helper: numerically-stable softmax
     def _softmax(x: np.ndarray) -> np.ndarray:
         x = np.asarray(x, dtype=float)
         x_max = np.max(x)
@@ -300,9 +301,8 @@ def _predict_proba_for_text(text, row, logreg_model):
 
     return probs
 
-
 def classify_lr(dataset: pd.DataFrame, X_train,
-                         logreg_model: LogisticRegression) -> (pd.DataFrame, pd.DataFrame):
+                logreg_model: LogisticRegression) -> (pd.DataFrame, pd.DataFrame):
     """
         Use logistic regression to classify the instances and get feature weights.
 
@@ -593,7 +593,7 @@ def plot_important_words(dataset):
     top_10_words = importance_word_counts.head(10)
 
     plt.figure(figsize=(12, 8))
-    sns.barplot(data=top_10_words, x='Word', y='Count', palette='viridis', hue='Count')
+    sns.barplot(data=top_10_words, x='word', y='count', palette='viridis', hue='count')
     plt.title('Top 10 Most Important Words Across Images')
     plt.xlabel('Word')
     plt.ylabel('Count')
@@ -686,10 +686,8 @@ def save_bounding_box_images(
     output_folder.mkdir(exist_ok=True, parents=True)
     valid_exts = {".jpg", ".jpeg", ".png"}
     if input_path.is_file():
-        print(f"Processing single file: {input_path}")
         image_paths = [input_path]
     else:
-        print(f"Processing directory: {input_path}")
         image_paths = [p for p in input_path.rglob("*") if p.suffix.lower() in valid_exts]
 
     results = {}
@@ -712,11 +710,9 @@ def save_bounding_box_images(
             image_with_boxes.save(output_path)
 
             results[str(img_path)] = str(output_path)
-            print(f"Processed: {img_path} → {output_path}")
 
         except Exception as e:
             print(f"Error processing {img_path}: {e}")
             results[str(img_path)] = None
 
     print(f"Completed! Processed {len(results)} images.")
-    return results
