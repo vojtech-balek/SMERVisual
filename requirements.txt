@@ -2,13 +2,14 @@ opencv-python==4.11.0.86
 matplotlib==3.9.2
 numpy==1.26.4
 pandas==2.2.3
-pathlib
 Pillow==11.1.0
 seaborn==0.13.2
 scikit-learn==1.6.1
 spacy==3.8.2
-torch==2.4.1
+torch==2.7.1
 tqdm==4.67.1
 transformers==4.48.0
-openai==1.52.2
+openai==2.0.0
 lime==0.2.0.1
+httpx==0.28.1
+accelerate==1.10.1
