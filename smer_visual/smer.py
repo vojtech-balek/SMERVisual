@@ -18,6 +18,8 @@ from PIL import Image, ImageDraw, ImageFont
 from .utils import _get_image_files_with_class, _encode_image, _preprocess_text
 
 
+_local_model_cache = {}
+
 def image_descriptions(
         model: Union[str, Path],
         data_folder: Union[str, Path],
@@ -80,17 +82,33 @@ def image_descriptions(
             except Exception as e:
                 results[file_path]['error'] = str(e)
         return results
-
     def process_with_local_model() -> dict:
+        """
+        Generate image descriptions using a local model.
+        Uses a cache to avoid reloading the model for repeated calls.
+        """
         results = {}
+        cache_key = str(model)  # model is from outer scope
+
         try:
-            processor = AutoProcessor.from_pretrained(model)
-            tokenizer = AutoTokenizer.from_pretrained(model)
-            local_model = MllamaForConditionalGeneration.from_pretrained(
-                model,
-                torch_dtype=torch.bfloat16,
-                device_map="auto",
-            )
+            if cache_key not in _local_model_cache:
+                processor = AutoProcessor.from_pretrained(model)
+                tokenizer = AutoTokenizer.from_pretrained(model)
+                local_model = MllamaForConditionalGeneration.from_pretrained(
+                    model,
+                    torch_dtype=torch.bfloat16,
+                    device_map="auto",
+                )
+                _local_model_cache[cache_key] = {
+                    'processor': processor,
+                    'tokenizer': tokenizer,
+                    'model': local_model
+                }
+
+            cached = _local_model_cache[cache_key]
+            processor = cached['processor']
+            tokenizer = cached['tokenizer']
+            local_model = cached['model']
 
             for file_path, label in _get_image_files_with_class(data_folder):
                 results[file_path] = {'label': label, 'description': None, 'error': None}
