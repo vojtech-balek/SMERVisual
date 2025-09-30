@@ -38,17 +38,21 @@ def image_descriptions(
 
         Example:
             >>> from smer_visual.smer_visual import image_description
+            >>> import os
+            >>> from dotenv import load_dotenv
+            >>> load_dotenv()
             >>> descriptions = image_description(
             ...     model="gpt-4o-mini",
             ...     data_folder="images/",
-            ...     api_key="your_api_key",
+            ...     api_key=os.getenv("OPENAI_API_KEY"),
             ...     user_prompt="Describe this image in 7 words. Be concise, try to maximize the information about the objects in this image."
             ... )
             >>> print(descriptions)
             {'image1.jpg': {'label': 'cat', 'description': 'A cat sitting on a mat', 'error': None},
              'image2.jpg': {'label': 'dog', 'description': 'A dog playing with a ball', 'error': None}}
         """
-    OPENAI_MODELS = {'gpt-4o-mini', '4o', 'o3', 'o3-mini', 'o3-pro', 'o1-pro', '4.1'}
+    OPENAI_MODELS = {'gpt-4o-mini', '4o', 'o3', 'o3-mini', 'o3-pro',
+                     'o1-pro', 'gpt-4.1', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano'}
 
     def process_with_openai(client: OpenAI) -> dict:
         results = {}
@@ -150,14 +154,17 @@ def embed_descriptions(
 
         Example:
             >>> from smer_visual.smer_visual import embed_descriptions
+            >>> import os
+            >>> from dotenv import load_dotenv
             >>> descriptions = {
             ...     "image1.jpg": {"description": "A cat sitting on a mat", "label": "cat"},
             ...     "image2.jpg": {"description": "A dog playing with a ball", "label": "dog"}
             ... }
+            >>> load_dotenv()
             >>> embeddings_df = embed_descriptions(
             ...     descriptions=descriptions,
             ...     embedding_model="text-embedding-ada-002",
-            ...     api_key="your_api_key"
+            ...     api_key=os.getenv("OPENAI_API_KEY")
             ... )
             >>> print(embeddings_df)
                    image               description                                           embedding label
@@ -169,22 +176,27 @@ def embed_descriptions(
 
     def process_with_openai(client: OpenAI) -> None:
         """
-        Generate embeddings for each word in the description using OpenAI API.
+        Generate embeddings for words in batches using OpenAI API.
         """
+        BATCH_SIZE = 100  # Adjust based on API limits and needs
+
         for file_path in results:
             if results[file_path]['description']:
                 try:
                     sentence = results[file_path]['description']
+                    words = sentence.split()
                     embeddings = []
 
-                    # Generate embeddings for each word in the sentence
-                    for word in sentence.split():
+                    # Process words in batches
+                    for i in range(0, len(words), BATCH_SIZE):
+                        batch = words[i:i + BATCH_SIZE]
                         response = client.embeddings.create(
-                            input=word,
+                            input=batch,
                             model=embedding_model
                         )
-                        word_embedding = response.data[0].embedding
-                        embeddings.append(word_embedding)
+                        # Extract embeddings in the same order as input
+                        batch_embeddings = [data.embedding for data in response.data]
+                        embeddings.extend(batch_embeddings)
 
                     results[file_path]['embedding'] = embeddings
                 except Exception as e:
@@ -243,13 +255,33 @@ def embed_descriptions(
             "embedding": values.get("embedding"),
             "label": values.get("label")
         })
+    return filter_missing_embeddings(pd.DataFrame(data))
 
-    return pd.DataFrame(data)
+
+def filter_missing_embeddings(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove rows where embeddings are missing.
+
+    Args:
+        df: DataFrame from embed_descriptions with potential missing embeddings.
+
+    Returns:
+        DataFrame with only valid embeddings.
+    """
+    valid_mask = df['embedding'].apply(lambda x: x is not None and len(x) > 0)
+    filtered_df = df[valid_mask].copy()
+    removed = len(df) - len(filtered_df)
+
+    if removed > 0:
+        print(f"Removed {removed} rows with missing embeddings.")
+
+    return filtered_df
 
 
 def aggregate_embeddings(embedding_list):
     """Flatten the list of lists and take the mean along the axis"""
     return np.mean(np.array(embedding_list), axis=0)
+
 
 def _predict_proba_for_text(text, row, logreg_model):
     """
@@ -301,14 +333,14 @@ def _predict_proba_for_text(text, row, logreg_model):
 
     return probs
 
-def classify_lr(dataset: pd.DataFrame, X_train,
+def classify_lr(dataset: pd.DataFrame, X,
                 logreg_model: LogisticRegression) -> (pd.DataFrame, pd.DataFrame):
     """
         Use logistic regression to classify the instances and get feature weights.
 
         Args:
             dataset (pd.DataFrame): DataFrame containing descriptions, embeddings, and labels.
-            X_train (np.ndarray): Training data embeddings.
+            X (np.ndarray): Data embeddings.
             logreg_model (LogisticRegression): Pre-trained logistic regression model.
 
         Returns:
@@ -330,7 +362,7 @@ def classify_lr(dataset: pd.DataFrame, X_train,
             >>> print(aopc_df)
             >>> print(updated_dataset)
         """
-    dataset['feature_importance'] = None  # Initialize column
+    dataset['feature_importance'] = None
     dataset['sorted_words_by_importance'] = None
 
     for idx in range(len(dataset)):
@@ -385,7 +417,7 @@ def classify_lr(dataset: pd.DataFrame, X_train,
     dataset['sorted_words_by_importance_processed'] = dataset['sorted_words_by_importance'].apply(
         _preprocess_text)
 
-    df_aopc = dataset[X_train.shape[0] + 1:].reset_index(drop=True)
+    df_aopc = dataset[X.shape[0] + 1:].reset_index(drop=True)
     return df_aopc, dataset
 
 
@@ -674,9 +706,6 @@ def save_bounding_box_images(
         device: Device to run model on ('cuda' or 'cpu')
         box_threshold: Threshold for box detection
         text_threshold: Threshold for text detection
-
-    Returns:
-        dict: Mapping of original image paths to saved output paths
     """
     # Convert paths to Path objects
     input_path = Path(input_path)

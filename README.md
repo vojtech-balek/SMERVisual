@@ -1,97 +1,122 @@
 # **SMERVisual**
 
-SMERVisual is a Python package designed for explainable machine learning using the **Self Model Entities Related (SMER) method**. It provides tools for explainable classification of images with **LLM-generated text descriptions**, which are then analyzed using the SMER explanation technique.
+SMERVisual is a Python package for **explainable machine learning** using the **Self Model Entities Related (SMER) method**.  
+It provides tools for classifying images with **LLM-generated text descriptions**, followed by explainability analysis using SMER.
 
-The package supports both **OpenAI API** models and **local language models**, offering flexibility in model selection.
+The package supports both **OpenAI API models** and **local models**, giving you flexibility in how you run it.
 
 ---
 
-## **Installation**
-Install SMERVisual using pip:
+## Installation
+
+Install SMERVisual via pip:
+
 ```sh
 pip install smer-visual
 ```
-
 ---
+## **Data Preparation**
+Before using SMERVisual, you must prepare your dataset in the following structure:
 
-## **Features**
+```kotlin
+data/
+├── cats/
+│   ├── cat1.jpg
+│   ├── cat2.jpg
+├── dogs/
+│   ├── dog1.jpg
+│   ├── dog2.jpg
+```
 
-### **Image Description**
-The `image_description` function generates text descriptions for images using either OpenAI models or local language models. Key features include:
-- Support for OpenAI models like `gpt-4o-mini` and local models.
-- Customizable prompts for generating concise and informative descriptions.
 
-### **Description Embeddings**
-The `get_description_embeddings` function computes embeddings for image descriptions using OpenAI or local models. 
+- Each subfolder name is treated as a class label.
+- Images must be placed inside their respective class folders.
 
-### **Explainable Classification**
-The `classify_with_logreg` function performs logistic regression-based classification on image datasets while computing **SMER** values for explainability. Key features include:
-- Aggregation of embeddings for classification.
-- Computation of feature importance for each word in the description.
-- Support for **AOPC (Area Over the Perturbation Curve)** analysis.
+Recommended minimum: At least 20 images per class for meaningful results.
 
-### **Visualization**
-- **Important Words**: The `plot_important_words` function visualizes the most important words across images.
-- **AOPC Curves**: The `plot_aopc` function compares the explainability of SMER and LIME methods by plotting AOPC curves.
-- **Bounding Boxes**: The `BoundingBoxGenerator` class overlays bounding boxes on images, highlighting critical words identified in classification.
+## **API Keys and Configuration**
+For OpenAI-based models, you need an API key.
+Best practice is to store your API key in a .env file and load it as an environment variable:
+1. Create a `.env` file in your project root:
+   ```
+   OPENAI_API_KEY=your_openai_api_key
+   ```
+2. Load the environment variable in your script:
+   ```python
+   from dotenv import load_dotenv
+   import os 
+   load_dotenv()
+   api_key = os.getenv("OPENAI_API_KEY")
+   ```
+3. Pass api_key to functions that require it.
 
----
+4. Do not hardcode API keys directly in scripts.
 
-## **Usage Example**
+## Quick Start (Working Example)
+Below is a complete example that demonstrates the correct workflow: 
+- Generating image descriptions
+- Embedding descriptions
+- Splitting data into train/test sets 
+- Training logistic regression
+- Running SMER explainability
 
-### **Image Description and Embeddings**
 ```python
-from smer_visual.smer import image_description, get_description_embeddings
+import os
+import numpy as np
+import pandas as pd
+from dotenv import load_dotenv
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
 
-# Generate image descriptions
-descriptions = image_description(
-    model="gpt-4o-mini",
-    data_folder="path/to/images",
-    api_key="your_openai_api_key"
+from smer_visual.smer import (
+    image_descriptions,
+    embed_descriptions,
+    aggregate_embeddings,
+    classify_lr,
+    plot_important_words,
+    plot_aopc,
 )
 
-# Generate embeddings for descriptions
-embeddings_df = get_description_embeddings(
+# 1. Load API key
+load_dotenv()
+api_key = os.getenv("OPENAI_API_KEY")
+
+# 2. Generate image descriptions
+descriptions = image_descriptions(
+    model="gpt-4o-mini",
+    data_folder="data/",
+    api_key=api_key
+)
+
+# 3. Generate embeddings
+embeddings_df = embed_descriptions(
     descriptions=descriptions,
     embedding_model="text-embedding-ada-002",
-    api_key="your_openai_api_key"
+    api_key=api_key
 )
-```
 
-### **Explainable Classification**
-```python
-from smer_visual.smer import classify_with_logreg, aggregate_embeddings
-from sklearn.linear_model import LogisticRegression
-import numpy as np
-
-# Prepare data
+# 4. Aggregate embeddings
 embeddings_df["aggregated_embedding"] = embeddings_df["embedding"].apply(aggregate_embeddings)
-X_train = np.stack(embeddings_df["aggregated_embedding"].values)
-y_train = embeddings_df["label"]
 
-# Train a logistic regression model
-logreg_model = LogisticRegression()
+# 5. Split into train/test
+X = np.stack(embeddings_df["aggregated_embedding"].values)
+y = embeddings_df["label"].values
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+
+# 6. Train a logistic regression model
+logreg_model = LogisticRegression(max_iter=1000)
 logreg_model.fit(X_train, y_train)
 
-# Perform classification and compute feature importance
-aopc_df, updated_dataset = classify_with_logreg(embeddings_df, X_train, logreg_model)
-```
+# 7. Run SMER classification and explanations
+aopc_df, updated_dataset = classify_lr(embeddings_df, X_test, logreg_model)
 
-### **Visualization**
-```python
-from smer_visual.smer import plot_important_words, plot_aopc
-
-# Plot important words
-plot_important_words(updated_dataset)
-
-# Plot AOPC curves
+# 8. Visualizations
+top_words = plot_important_words(updated_dataset)
 plot_aopc(aopc_df, logreg_model, max_k=5)
-```
 
-### **Bounding Box Generation**
-```python
+# 9. Save bounding box images 
 from smer_visual.smer import save_bounding_box_images
-results = save_bounding_box_images(
+save_bounding_box_images(
     input_path="data/",
     output_folder="output",
     df_top_words=top_words_df,
@@ -99,17 +124,16 @@ results = save_bounding_box_images(
     box_threshold = 0.5,
     text_threshold = 0.4
 )
-
 ```
-
+---
 ---
 
 ## **Why Use SMERVisual?**
 
-- **Explainable AI** – Provides insight into model decision-making.
+- **Explainable AI** – Understand model decisions with SMER.
 - **Model-Agnostic** – Compatible with OpenAI APIs and open-source models.
-- **Zero-Shot Detection** – No additional training data required.
-- **Easy Integration** – Simple API for seamless use with existing machine learning workflows.
+- **Zero-Shot Detection** – No extra training data required.
+- **Easy Integration** – Simple API, modular design
 
 ---
 
