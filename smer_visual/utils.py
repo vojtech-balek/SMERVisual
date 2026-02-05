@@ -16,7 +16,6 @@ def _get_image_files_with_class(folder_path):
             if file.lower().endswith(valid_extensions) and '.ipynb_checkpoints' not in root:
                 image_path = os.path.join(root, file)
                 class_name = os.path.basename(root)
-
                 yield image_path, class_name
 
 

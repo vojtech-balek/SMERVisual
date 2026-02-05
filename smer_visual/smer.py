@@ -12,10 +12,18 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
 from lime.lime_text import LimeTextExplainer
-from typing import Union, Optional
+from typing import Union, Optional, List, Dict, Any, Tuple
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
 from PIL import Image, ImageDraw, ImageFont
 from .utils import _get_image_files_with_class, _encode_image, _preprocess_text
+
+# Import LLM Feature Gen package for interpretable feature extraction
+try:
+    import LLM_feature_gen as lfg
+    LFG_AVAILABLE = True
+except ImportError:
+    lfg = None
+    LFG_AVAILABLE = False
 
 
 def image_descriptions(
@@ -716,3 +724,1190 @@ def save_bounding_box_images(
             results[str(img_path)] = None
 
     print(f"Completed! Processed {len(results)} images.")
+
+
+# =============================================================================
+# LLM Feature Gen (lfg) Integration
+# =============================================================================
+
+def _check_lfg_available():
+    """Check if LLM Feature Gen package is available."""
+    if not LFG_AVAILABLE:
+        raise ImportError(
+            "LLM_feature_gen package is not installed. "
+            "Please install it to use this functionality: pip install LLM_feature_gen"
+        )
+
+
+def discover_features(
+        data_source: Union[str, Path, List[str]],
+        source_type: str = "images",
+        prompt: Optional[str] = None,
+        provider: Optional[Any] = None,
+        output_dir: Union[str, Path] = "outputs",
+        output_filename: Optional[str] = None,
+        num_frames: int = 5,
+        use_audio: bool = True,
+        max_videos_to_sample: int = 5,
+) -> Dict[str, Any]:
+    """
+    Discover interpretable features from images or videos using LLM Feature Gen.
+
+    This function analyzes a sample of images or videos and proposes a set of
+    interpretable features that can be used for classification.
+
+    Args:
+        data_source (Union[str, Path, List[str]]): Path to folder containing images/videos,
+            or a list of file paths.
+        source_type (str): Type of source data - "images" or "videos". Default: "images".
+        prompt (Optional[str]): Custom prompt for feature discovery. If None, uses default.
+        provider (Optional[Any]): LFG OpenAIProvider instance. If None, creates one from env vars.
+        output_dir (Union[str, Path]): Directory to save discovered features JSON. Default: "outputs".
+        output_filename (Optional[str]): Custom output filename. Default: "discovered_features.json".
+        num_frames (int): Number of frames to extract per video (videos only). Default: 5.
+        use_audio (bool): Whether to use audio transcription (videos only). Default: True.
+        max_videos_to_sample (int): Maximum videos to sample for discovery. Default: 5.
+
+    Returns:
+        Dict[str, Any]: Dictionary containing proposed features with their descriptions.
+
+    Example:
+        >>> from smer_visual.smer import discover_features
+        >>> # Discover features from images
+        >>> features = discover_features(
+        ...     data_source="images/sample/",
+        ...     source_type="images"
+        ... )
+        >>> print(features)
+        {'proposed_features': [{'feature': 'color', 'description': '...'}, ...]}
+
+        >>> # Discover features from videos
+        >>> features = discover_features(
+        ...     data_source="videos/sample/",
+        ...     source_type="videos",
+        ...     use_audio=True
+        ... )
+    """
+    _check_lfg_available()
+
+    if source_type == "images":
+        return lfg.discover_features_from_images(
+            image_paths_or_folder=data_source,
+            prompt=prompt,
+            provider=provider,
+            as_set=True,
+            output_dir=output_dir,
+            output_filename=output_filename,
+        )
+    elif source_type == "videos":
+        return lfg.discover_features_from_videos(
+            video_path=str(data_source),
+            prompt=prompt,
+            provider=provider,
+            num_frames=num_frames,
+            output_dir=output_dir,
+            output_filename=output_filename,
+            use_audio=use_audio,
+            max_videos_to_sample=max_videos_to_sample,
+        )
+    else:
+        raise ValueError(f"Invalid source_type: {source_type}. Must be 'images' or 'videos'.")
+
+
+def generate_features(
+        root_folder: Union[str, Path],
+        discovered_features: Optional[Dict[str, Any]] = None,
+        discovered_features_path: Union[str, Path] = "outputs/discovered_features.json",
+        prompt: Optional[str] = None,
+        output_dir: Union[str, Path] = "outputs",
+        classes: Optional[List[str]] = None,
+        provider: Optional[Any] = None,
+        merge_to_single_csv: bool = True,
+        merged_csv_name: str = "all_feature_values.csv",
+        use_audio: bool = True,
+        source_type: str = "images",
+) -> Dict[str, str]:
+    """
+    Generate feature values for all images/videos in a folder using discovered features.
+
+    This function processes images/videos organized in class subfolders and generates
+    interpretable feature values for each file based on previously discovered features.
+
+    Args:
+        root_folder (Union[str, Path]): Root folder containing class subfolders with images/videos.
+        discovered_features (Optional[Dict[str, Any]]): Discovered features dict from discover_features().
+            If None, loads from discovered_features_path.
+        discovered_features_path (Union[str, Path]): Path to discovered features JSON file.
+            Default: "outputs/discovered_features.json".
+        prompt (Optional[str]): Custom prompt for feature generation. If None, uses default.
+        output_dir (Union[str, Path]): Directory to save output CSVs. Default: "outputs".
+        classes (Optional[List[str]]): List of class names (subfolders) to process.
+            If None, processes all subfolders.
+        provider (Optional[Any]): LFG OpenAIProvider instance. If None, creates one from env vars.
+        merge_to_single_csv (bool): Whether to merge all class CSVs into one. Default: True.
+        merged_csv_name (str): Name of merged CSV file. Default: "all_feature_values.csv".
+        use_audio (bool): Whether to use audio transcription (videos only). Default: True.
+        source_type (str): Type of source data - "images" or "videos". Default: "images".
+
+    Returns:
+        Dict[str, str]: Dictionary mapping class names to their output CSV paths.
+            If merge_to_single_csv=True, includes "__merged__" key with merged CSV path.
+
+    Example:
+        >>> from smer_visual.smer import discover_features, generate_features
+        >>> # First discover features
+        >>> features = discover_features("images/sample/", source_type="images")
+        >>> # Then generate feature values for all images
+        >>> csv_paths = generate_features(
+        ...     root_folder="images/",
+        ...     discovered_features=features,
+        ...     merge_to_single_csv=True
+        ... )
+        >>> print(csv_paths)
+        {'cat': 'outputs/cat_feature_values.csv', 'dog': 'outputs/dog_feature_values.csv',
+         '__merged__': 'outputs/all_feature_values.csv'}
+    """
+    _check_lfg_available()
+
+    if source_type == "images":
+        return lfg.generate_features_from_images(
+            root_folder=root_folder,
+            discovered_features=discovered_features,
+            discovered_features_path=discovered_features_path,
+            prompt=prompt,
+            output_dir=output_dir,
+            classes=classes,
+            provider=provider,
+            merge_to_single_csv=merge_to_single_csv,
+            merged_csv_name=merged_csv_name,
+        )
+    elif source_type == "videos":
+        return lfg.generate_features_from_videos(
+            root_folder=root_folder,
+            discovered_features=discovered_features,
+            discovered_features_path=discovered_features_path,
+            prompt=prompt,
+            output_dir=output_dir,
+            classes=classes,
+            provider=provider,
+            merge_to_single_csv=merge_to_single_csv,
+            merged_csv_name=merged_csv_name,
+            use_audio=use_audio,
+        )
+    else:
+        raise ValueError(f"Invalid source_type: {source_type}. Must be 'images' or 'videos'.")
+
+
+def load_lfg_features(
+        csv_path: Union[str, Path],
+        feature_columns: Optional[List[str]] = None,
+) -> pd.DataFrame:
+    """
+    Load LFG-generated feature values from CSV and prepare for classification.
+
+    Args:
+        csv_path (Union[str, Path]): Path to the CSV file generated by generate_features().
+        feature_columns (Optional[List[str]]): List of feature column names to use.
+            If None, auto-detects feature columns (excludes 'Image', 'Class', 'raw_llm_output').
+
+    Returns:
+        pd.DataFrame: DataFrame with Image, Class, and feature columns ready for classification.
+
+    Example:
+        >>> from smer_visual.smer import load_lfg_features
+        >>> df = load_lfg_features("outputs/all_feature_values.csv")
+        >>> print(df.columns)
+        Index(['Image', 'Class', 'color', 'texture', 'shape', ...])
+    """
+    df = pd.read_csv(csv_path)
+
+    if feature_columns is None:
+        # Auto-detect feature columns (exclude metadata columns)
+        exclude_cols = {'Image', 'Class', 'raw_llm_output'}
+        feature_columns = [col for col in df.columns if col not in exclude_cols]
+
+    # Extract just the value part from "feature_name = value" format
+    for col in feature_columns:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: str(x).split(' = ', 1)[-1] if pd.notna(x) else x)
+
+    return df
+
+
+def embed_lfg_features(
+        df: pd.DataFrame,
+        embedding_model: Union[str, Path],
+        feature_columns: Optional[List[str]] = None,
+        api_key: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Generate embeddings for LFG feature values, similar to embed_descriptions for SMER.
+
+    Each feature value is embedded separately, allowing SMER-style perturbation analysis
+    on LFG features. The result is a DataFrame compatible with SMER classification functions.
+
+    Args:
+        df (pd.DataFrame): DataFrame from load_lfg_features() with feature columns.
+        embedding_model (Union[str, Path]): Model identifier for OpenAI or path to local model.
+        feature_columns (Optional[List[str]]): Feature columns to embed.
+            If None, auto-detects feature columns.
+        api_key (Optional[str]): OpenAI API key (required for OpenAI embeddings).
+
+    Returns:
+        pd.DataFrame: DataFrame with columns: image, description, embedding, label.
+            - 'description': concatenated feature values as "feature1:value1 feature2:value2 ..."
+            - 'embedding': list of embeddings, one per feature value
+
+    Example:
+        >>> from smer_visual.smer import load_lfg_features, embed_lfg_features
+        >>> df = load_lfg_features("outputs/all_feature_values.csv")
+        >>> df_embedded = embed_lfg_features(df, embedding_model="text-embedding-3-small", api_key="...")
+        >>> # Now use with classify_lr(), plot_aopc(), etc.
+    """
+    OPENAI_MODELS = {'text-embedding-ada-002', 'text-embedding-3-small', 'text-embedding-3-large'}
+
+    if feature_columns is None:
+        exclude_cols = {'Image', 'Class', 'raw_llm_output'}
+        feature_columns = [col for col in df.columns if col not in exclude_cols]
+
+    results = []
+
+    def get_openai_embedding(client, text, model):
+        response = client.embeddings.create(input=text, model=model)
+        return response.data[0].embedding
+
+    def get_local_embedding(tokenizer, model, device, text):
+        inputs = tokenizer(text, return_tensors='pt', padding=True, truncation=True, max_length=512)
+        inputs = {key: value.to(device) for key, value in inputs.items()}
+        with torch.no_grad():
+            outputs = model(**inputs)
+        return np.squeeze(outputs.last_hidden_state[:, 0, :].cpu().numpy())
+
+    # Initialize model based on type
+    client = None
+    tokenizer = None
+    local_model = None
+    device = None
+    use_openai = False
+
+    if isinstance(embedding_model, str) and embedding_model in OPENAI_MODELS:
+        if not api_key:
+            raise ValueError("API key required for OpenAI embeddings")
+        client = OpenAI(api_key=api_key)
+        use_openai = True
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(embedding_model)
+        local_model = AutoModel.from_pretrained(embedding_model)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        local_model.to(device)
+
+    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Embedding LFG features"):
+        # Build description string from feature values
+        feature_tokens = []
+        embeddings = []
+
+        for col in feature_columns:
+            value = row[col]
+            if pd.notna(value) and str(value).strip():
+                # Create token as "feature_name:value"
+                token = f"{col}:{value}"
+                feature_tokens.append(token)
+
+                try:
+                    if use_openai:
+                        emb = get_openai_embedding(client, token, embedding_model)
+                    else:
+                        emb = get_local_embedding(tokenizer, local_model, device, token)
+                    embeddings.append(emb)
+                except Exception as e:
+                    print(f"Error embedding '{token}': {e}")
+                    embeddings.append(None)
+
+        # Filter out None embeddings
+        valid_pairs = [(t, e) for t, e in zip(feature_tokens, embeddings) if e is not None]
+        if valid_pairs:
+            feature_tokens, embeddings = zip(*valid_pairs)
+            feature_tokens = list(feature_tokens)
+            embeddings = list(embeddings)
+        else:
+            feature_tokens = []
+            embeddings = []
+
+        description = ' '.join(feature_tokens)
+
+        results.append({
+            'image': row.get('Image', idx),
+            'description': description,
+            'embedding': embeddings if embeddings else None,
+            'label': row.get('Class', None),
+            'feature_names': feature_columns,  # Store feature names for reference
+        })
+
+    return pd.DataFrame(results)
+
+
+def _predict_proba_for_lfg_features(feature_mask: List[bool], row: pd.Series,
+                                     logreg_model: LogisticRegression) -> np.ndarray:
+    """
+    Predict probabilities for LFG features with a mask indicating which features to include.
+
+    Args:
+        feature_mask (List[bool]): Boolean mask for which features to include.
+        row (pd.Series): Row containing embeddings.
+        logreg_model (LogisticRegression): Pre-trained logistic regression model.
+
+    Returns:
+        np.ndarray: Predicted probabilities.
+    """
+    embeddings = row['embedding']
+    if embeddings is None or len(embeddings) == 0:
+        return np.zeros(len(logreg_model.classes_))
+
+    # Select embeddings based on mask
+    selected_embeddings = [emb for emb, mask in zip(embeddings, feature_mask) if mask]
+
+    if len(selected_embeddings) > 0:
+        emb = np.mean(selected_embeddings, axis=0)
+    else:
+        emb = np.zeros(len(embeddings[0]))
+
+    # Compute logits
+    logits = np.dot(emb, logreg_model.coef_.T) + logreg_model.intercept_
+    logits = np.asarray(logits).ravel()
+
+    # Softmax/sigmoid based on number of classes
+    def _softmax(x: np.ndarray) -> np.ndarray:
+        x = np.asarray(x, dtype=float)
+        x_max = np.max(x)
+        ex = np.exp(x - x_max)
+        return ex / ex.sum()
+
+    if logreg_model.coef_.shape[0] > 1:
+        probs = _softmax(logits)
+    else:
+        logit_val = float(logits[0]) if logits.size > 0 else 0.0
+        p = 1.0 / (1.0 + np.exp(-logit_val))
+        probs = np.array([1.0 - p, p])
+
+    return probs
+
+
+def classify_lr_lfg(
+        dataset: pd.DataFrame,
+        X_train: np.ndarray,
+        logreg_model: LogisticRegression,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Apply SMER classification method to LFG-embedded features.
+
+    This is the LFG equivalent of classify_lr(). It computes feature importance
+    by measuring probability drop when each feature is removed (SMER perturbation method).
+
+    Args:
+        dataset (pd.DataFrame): DataFrame from embed_lfg_features() with embeddings.
+        X_train (np.ndarray): Training data embeddings.
+        logreg_model (LogisticRegression): Pre-trained logistic regression model.
+
+    Returns:
+        Tuple[pd.DataFrame, pd.DataFrame]: (AOPC DataFrame, updated dataset with importance scores)
+
+    Example:
+        >>> from smer_visual.smer import load_lfg_features, embed_lfg_features, classify_lr_lfg
+        >>> df = load_lfg_features("outputs/all_feature_values.csv")
+        >>> df_embedded = embed_lfg_features(df, "text-embedding-3-small", api_key="...")
+        >>> X_train = np.vstack([aggregate_embeddings(e) for e in df_embedded['embedding'][:80]])
+        >>> logreg_model = LogisticRegression().fit(X_train, df_embedded['label'][:80])
+        >>> df_aopc, df_updated = classify_lr_lfg(df_embedded, X_train, logreg_model)
+    """
+    dataset = dataset.copy()
+    dataset['feature_importance'] = None
+    dataset['sorted_features_by_importance'] = None
+
+    for idx in range(len(dataset)):
+        row = dataset.iloc[idx]
+        embeddings = row['embedding']
+
+        if embeddings is None or len(embeddings) == 0:
+            continue
+
+        description = row['description']
+        tokens = description.split() if description else []
+        n_features = len(embeddings)
+
+        if n_features == 0:
+            continue
+
+        # Get original prediction with all features
+        all_mask = [True] * n_features
+        original_probs = _predict_proba_for_lfg_features(all_mask, row, logreg_model)
+
+        target_class = row['label']
+        if target_class in logreg_model.classes_.tolist():
+            class_index = logreg_model.classes_.tolist().index(target_class)
+        else:
+            class_index = 0
+
+        importance_scores = {}
+
+        # Compute importance by removing each feature
+        for i in range(n_features):
+            # Create mask with feature i removed
+            perturbed_mask = [True] * n_features
+            perturbed_mask[i] = False
+
+            perturbed_probs = _predict_proba_for_lfg_features(perturbed_mask, row, logreg_model)
+            drop = original_probs[class_index] - perturbed_probs[class_index]
+
+            feature_token = tokens[i] if i < len(tokens) else f"feature_{i}"
+            importance_scores[feature_token] = drop
+
+        # Sort by importance
+        sorted_importance = sorted(importance_scores.items(), key=lambda x: x[1], reverse=True)
+        importance_str = ','.join(f"{feat}:{score:.4f}" for feat, score in sorted_importance)
+        dataset.at[idx, 'feature_importance'] = importance_str
+
+        sorted_features_list = [feat for feat, score in sorted_importance]
+        dataset.at[idx, 'sorted_features_by_importance'] = ','.join(sorted_features_list)
+
+    # Create AOPC dataset (test set portion)
+    df_aopc = dataset[X_train.shape[0] + 1:].reset_index(drop=True)
+    return df_aopc, dataset
+
+
+def compute_aopc_lfg(df: pd.DataFrame, top_features: List[str], max_k: int,
+                      logreg_model: LogisticRegression) -> List[float]:
+    """
+    Compute AOPC (Area Over Perturbation Curve) for LFG features.
+
+    This is the LFG equivalent of compute_aopc(), measuring the average probability
+    drop when top features are progressively removed.
+
+    Args:
+        df (pd.DataFrame): DataFrame with LFG embeddings.
+        top_features (List[str]): List of top feature tokens to remove.
+        max_k (int): Maximum number of features to remove.
+        logreg_model (LogisticRegression): Pre-trained logistic regression model.
+
+    Returns:
+        List[float]: Average probability drops for K=0,1,...,max_k.
+    """
+    avg_drops = []
+
+    for K in range(0, max_k + 1):
+        drops = []
+
+        for idx, row in df.iterrows():
+            embeddings = row['embedding']
+            description = row['description']
+
+            if embeddings is None or len(embeddings) == 0:
+                continue
+
+            tokens = description.split() if description else []
+            n_features = len(embeddings)
+
+            # Original prediction
+            all_mask = [True] * n_features
+            original_probs = _predict_proba_for_lfg_features(all_mask, row, logreg_model)
+            original_class = np.argmax(original_probs)
+            original_prob = original_probs[original_class]
+
+            # Find which top_features are in this sample's tokens
+            top_in_sample = [t for t in top_features if t in tokens]
+            features_to_remove = top_in_sample[:K]
+
+            if not features_to_remove:
+                drop = 0.0
+            else:
+                # Create mask removing these features
+                perturbed_mask = [
+                    tokens[i] not in features_to_remove
+                    for i in range(n_features)
+                ]
+                perturbed_probs = _predict_proba_for_lfg_features(perturbed_mask, row, logreg_model)
+                perturbed_prob = perturbed_probs[original_class]
+                drop = original_prob - perturbed_prob
+
+            drops.append(drop)
+
+        avg_drops.append(np.mean(drops) if drops else 0.0)
+
+    return avg_drops
+
+
+def build_custom_predict_lfg(row: pd.Series, logreg_model: LogisticRegression):
+    """
+    Build a LIME-compatible prediction function for LFG features.
+
+    Args:
+        row (pd.Series): Row with LFG embeddings.
+        logreg_model (LogisticRegression): Pre-trained model.
+
+    Returns:
+        Callable: Prediction function for LIME.
+    """
+    def predict_for_lime(texts):
+        emb_list = []
+        original_tokens = row['description'].split() if row['description'] else []
+        embeddings = row['embedding'] if row['embedding'] is not None else []
+        token_to_index = {t: i for i, t in enumerate(original_tokens)}
+
+        for t in texts:
+            t_tokens = t.split()
+            valid_indices = [token_to_index[x] for x in t_tokens if x in token_to_index]
+
+            if len(valid_indices) > 0 and len(embeddings) > 0:
+                emb = np.mean([np.array(embeddings[ix]) for ix in valid_indices], axis=0)
+            else:
+                if len(embeddings) > 0:
+                    emb = np.zeros(len(embeddings[0]))
+                else:
+                    emb = np.zeros(logreg_model.coef_.shape[1])
+            emb_list.append(emb)
+
+        return logreg_model.predict_proba(emb_list)
+
+    return predict_for_lime
+
+
+def plot_aopc_lfg(df_aopc: pd.DataFrame, logreg_model: LogisticRegression, max_k: int = 6):
+    """
+    Plot AOPC curves comparing SMER and LIME importance for LFG features.
+
+    This is the LFG equivalent of plot_aopc(), providing interpretability analysis
+    on LFG-generated features using the SMER perturbation method.
+
+    Args:
+        df_aopc (pd.DataFrame): DataFrame with LFG embeddings (test set).
+        logreg_model (LogisticRegression): Pre-trained logistic regression model.
+        max_k (int): Maximum number of features to remove. Default: 6.
+
+    Returns:
+        None: Displays the plot.
+
+    Example:
+        >>> from smer_visual.smer import plot_aopc_lfg
+        >>> plot_aopc_lfg(df_aopc, logreg_model, max_k=6)
+    """
+    # SMER importance calculation for LFG features
+    smer_rows = []
+
+    for idx, row in tqdm(df_aopc.iterrows(), total=len(df_aopc), desc="Computing SMER importances (LFG)"):
+        embeddings = row['embedding']
+        description = row['description']
+
+        if embeddings is None or len(embeddings) == 0:
+            continue
+
+        tokens = description.split() if description else []
+        n_features = len(embeddings)
+
+        # Original prediction
+        all_mask = [True] * n_features
+        original_probs = _predict_proba_for_lfg_features(all_mask, row, logreg_model)
+        original_class = np.argmax(original_probs)
+        original_prob = original_probs[original_class]
+
+        # Compute importance for each feature
+        for i in range(n_features):
+            perturbed_mask = [True] * n_features
+            perturbed_mask[i] = False
+
+            perturbed_probs = _predict_proba_for_lfg_features(perturbed_mask, row, logreg_model)
+            drop = original_prob - perturbed_probs[original_class]
+
+            feature_token = tokens[i] if i < len(tokens) else f"feature_{i}"
+            smer_rows.append({
+                'feature': feature_token,
+                'importance': abs(drop)
+            })
+
+    smer_df = pd.DataFrame(smer_rows)
+
+    # LIME importance calculation
+    if 'label' in df_aopc.columns:
+        class_names = df_aopc['label'].unique().tolist()
+    else:
+        class_names = []
+
+    explainer = LimeTextExplainer(class_names=class_names, random_state=42)
+    lime_rows = []
+
+    for idx, row in tqdm(df_aopc.iterrows(), total=len(df_aopc), desc="Computing LIME importances (LFG)"):
+        description = row['description']
+        if not description or row['embedding'] is None:
+            continue
+
+        lime_predict_fn = build_custom_predict_lfg(row, logreg_model)
+
+        try:
+            exp = explainer.explain_instance(
+                text_instance=description,
+                classifier_fn=lime_predict_fn,
+                num_features=len(description.split())
+            )
+
+            for feat, imp in exp.as_list():
+                lime_rows.append({
+                    'feature': feat,
+                    'importance': abs(imp)
+                })
+        except Exception as e:
+            print(f"LIME error for row {idx}: {e}")
+            continue
+
+    lime_df = pd.DataFrame(lime_rows)
+
+    # Aggregate and get top features
+    if len(smer_df) > 0:
+        global_importances_smer = (
+            smer_df.groupby('feature')['importance'].mean()
+            .reset_index()
+            .sort_values('importance', ascending=False)
+        )
+        top_features_smer = global_importances_smer['feature'].head(20).tolist()
+    else:
+        top_features_smer = []
+
+    if len(lime_df) > 0:
+        global_importances_lime = (
+            lime_df.groupby('feature')['importance'].mean()
+            .reset_index()
+            .sort_values('importance', ascending=False)
+        )
+        top_features_lime = global_importances_lime['feature'].head(20).tolist()
+    else:
+        top_features_lime = []
+
+    # Compute AOPC
+    AOPC_SMER = compute_aopc_lfg(df_aopc, top_features_smer, max_k, logreg_model)
+    AOPC_LIME = compute_aopc_lfg(df_aopc, top_features_lime, max_k, logreg_model)
+
+    # Plot
+    plt.figure(figsize=(10, 6))
+    x_values = range(0, max_k + 1)
+    plt.plot(x_values, AOPC_SMER, marker='o', label='SMER (LFG Features)')
+    plt.plot(x_values, AOPC_LIME, marker='x', label='LIME (LFG Features)')
+
+    plt.xlabel('Number of Features Removed (K)')
+    plt.ylabel('Average Probability Drop')
+    plt.title('AOPC Comparison: SMER vs LIME on LFG Features')
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+
+
+def plot_important_features_lfg(dataset: pd.DataFrame) -> pd.DataFrame:
+    """
+    Plot the top 10 most important LFG features across all samples.
+
+    This is the LFG equivalent of plot_important_words().
+
+    Args:
+        dataset (pd.DataFrame): DataFrame with 'sorted_features_by_importance' column.
+
+    Returns:
+        pd.DataFrame: DataFrame with top 10 features and their counts.
+
+    Example:
+        >>> from smer_visual.smer import plot_important_features_lfg
+        >>> top_features = plot_important_features_lfg(dataset)
+    """
+    most_important_features = []
+
+    for idx in range(len(dataset)):
+        sorted_features = dataset.at[idx, 'sorted_features_by_importance']
+        if sorted_features and isinstance(sorted_features, str):
+            first_feature = sorted_features.split(',')[0].strip()
+            if first_feature:
+                most_important_features.append(first_feature)
+
+    feature_counts = pd.Series(most_important_features).value_counts().reset_index()
+    feature_counts.columns = ['feature', 'count']
+
+    top_10_features = feature_counts.head(10)
+
+    plt.figure(figsize=(12, 8))
+    sns.barplot(data=top_10_features, x='feature', y='count', palette='viridis', hue='count')
+    plt.title('Top 10 Most Important LFG Features Across Samples')
+    plt.xlabel('Feature (name:value)')
+    plt.ylabel('Count')
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    plt.legend([], [], frameon=False)
+    plt.show()
+
+    return top_10_features
+
+
+def smer_lfg_pipeline(
+        data_folder: Union[str, Path],
+        embedding_model: Union[str, Path],
+        discovery_samples: Union[str, Path, List[str], None] = None,
+        api_key: Optional[str] = None,
+        source_type: str = "images",
+        output_dir: Union[str, Path] = "outputs",
+        provider: Optional[Any] = None,
+        test_size: float = 0.2,
+        random_state: int = 42,
+        use_audio: bool = True,
+        max_k: int = 6,
+) -> Dict[str, Any]:
+    """
+    End-to-end SMER pipeline using LFG features for interpretable classification.
+
+    This pipeline combines the LFG feature discovery/generation with the SMER
+    perturbation-based interpretability method. It:
+    1. Discovers features from sample images/videos using LFG
+    2. Generates feature values for all data using LFG
+    3. Embeds feature values for SMER analysis
+    4. Trains classifier and computes SMER importance scores
+    5. Generates AOPC plots comparing SMER vs LIME
+
+    Args:
+        data_folder (Union[str, Path]): Root folder with class subfolders.
+        embedding_model (Union[str, Path]): Embedding model for feature values.
+        discovery_samples (Union[str, Path, List[str], None]): Samples for feature discovery.
+        api_key (Optional[str]): API key for OpenAI embeddings.
+        source_type (str): "images" or "videos". Default: "images".
+        output_dir (Union[str, Path]): Output directory. Default: "outputs".
+        provider (Optional[Any]): LFG OpenAIProvider instance.
+        test_size (float): Test set fraction. Default: 0.2.
+        random_state (int): Random seed. Default: 42.
+        use_audio (bool): Use audio for videos. Default: True.
+        max_k (int): Max features to remove for AOPC. Default: 6.
+
+    Returns:
+        Dict[str, Any]: Dictionary containing:
+            - 'discovered_features': Discovered feature specification
+            - 'feature_values_path': Path to generated CSV
+            - 'embedded_data': DataFrame with embeddings
+            - 'model': Trained classifier
+            - 'df_aopc': AOPC analysis DataFrame
+            - 'dataset': Full dataset with importance scores
+            - 'top_features': Top important features DataFrame
+
+    Example:
+        >>> from smer_visual.smer import smer_lfg_pipeline
+        >>> results = smer_lfg_pipeline(
+        ...     data_folder="images/",
+        ...     embedding_model="text-embedding-3-small",
+        ...     api_key="your_api_key",
+        ...     source_type="images"
+        ... )
+        >>> print(results['top_features'])
+    """
+    _check_lfg_available()
+    from sklearn.model_selection import train_test_split
+
+    data_folder = Path(data_folder)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Step 1: Discover features using LFG
+    print("Step 1: Discovering features with LFG...")
+    if discovery_samples is None:
+        valid_exts = {".jpg", ".jpeg", ".png"} if source_type == "images" else {".mp4", ".mov", ".avi", ".mkv"}
+        sample_files = []
+        for subfolder in data_folder.iterdir():
+            if subfolder.is_dir():
+                for f in subfolder.iterdir():
+                    if f.suffix.lower() in valid_exts:
+                        sample_files.append(str(f))
+                        if len(sample_files) >= 5:
+                            break
+            if len(sample_files) >= 5:
+                break
+        discovery_samples = sample_files
+
+    discovered_features = discover_features(
+        data_source=discovery_samples,
+        source_type=source_type,
+        provider=provider,
+        output_dir=output_dir,
+        use_audio=use_audio,
+    )
+    print(f"Discovered {len(discovered_features.get('proposed_features', []))} features")
+
+    # Step 2: Generate feature values
+    print("Step 2: Generating feature values with LFG...")
+    csv_paths = generate_features(
+        root_folder=data_folder,
+        discovered_features=discovered_features,
+        output_dir=output_dir,
+        provider=provider,
+        merge_to_single_csv=True,
+        source_type=source_type,
+        use_audio=use_audio,
+    )
+    merged_csv_path = csv_paths.get('__merged__', list(csv_paths.values())[0])
+    print(f"Feature values saved to: {merged_csv_path}")
+
+    # Step 3: Load and embed features for SMER
+    print("Step 3: Loading and embedding LFG features...")
+    df = load_lfg_features(merged_csv_path)
+    df_embedded = embed_lfg_features(df, embedding_model, api_key=api_key)
+    print(f"Embedded {len(df_embedded)} samples")
+
+    # Step 4: Train classifier
+    print("Step 4: Training classifier...")
+    # Filter out samples with no embeddings
+    valid_mask = df_embedded['embedding'].apply(lambda x: x is not None and len(x) > 0)
+    df_valid = df_embedded[valid_mask].reset_index(drop=True)
+
+    X = np.vstack([aggregate_embeddings(e) for e in df_valid['embedding']])
+    y = df_valid['label'].values
+
+    X_train, X_test, y_train, y_test, train_idx, test_idx = train_test_split(
+        X, y, range(len(X)), test_size=test_size, random_state=random_state, stratify=y
+    )
+
+    logreg_model = LogisticRegression(max_iter=1000, random_state=random_state)
+    logreg_model.fit(X_train, y_train)
+
+    accuracy = logreg_model.score(X_test, y_test)
+    print(f"Classifier accuracy: {accuracy:.4f}")
+
+    # Step 5: SMER analysis
+    print("Step 5: Computing SMER feature importance...")
+    df_aopc, dataset = classify_lr_lfg(df_valid, X_train, logreg_model)
+
+    # Step 6: Plot results
+    print("Step 6: Generating plots...")
+    plot_aopc_lfg(df_aopc, logreg_model, max_k=max_k)
+    top_features = plot_important_features_lfg(dataset)
+
+    return {
+        'discovered_features': discovered_features,
+        'feature_values_path': merged_csv_path,
+        'embedded_data': df_embedded,
+        'model': logreg_model,
+        'df_aopc': df_aopc,
+        'dataset': dataset,
+        'top_features': top_features,
+        'accuracy': accuracy,
+    }
+
+
+def encode_lfg_features(
+        df: pd.DataFrame,
+        feature_columns: Optional[List[str]] = None,
+        encoding: str = "onehot",
+) -> Tuple[pd.DataFrame, Any]:
+    """
+    Encode LFG categorical features for use with classifiers.
+
+    Args:
+        df (pd.DataFrame): DataFrame from load_lfg_features().
+        feature_columns (Optional[List[str]]): Feature columns to encode.
+            If None, auto-detects feature columns.
+        encoding (str): Encoding method - "onehot" or "label". Default: "onehot".
+
+    Returns:
+        Tuple[pd.DataFrame, Any]: Tuple of (encoded DataFrame, encoder object).
+
+    Example:
+        >>> from smer_visual.smer import load_lfg_features, encode_lfg_features
+        >>> df = load_lfg_features("outputs/all_feature_values.csv")
+        >>> df_encoded, encoder = encode_lfg_features(df, encoding="onehot")
+    """
+    from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+
+    if feature_columns is None:
+        exclude_cols = {'Image', 'Class', 'raw_llm_output'}
+        feature_columns = [col for col in df.columns if col not in exclude_cols]
+
+    df_encoded = df.copy()
+
+    if encoding == "onehot":
+        encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
+        encoded_features = encoder.fit_transform(df[feature_columns].fillna('unknown'))
+        encoded_col_names = encoder.get_feature_names_out(feature_columns)
+        df_encoded = pd.DataFrame(encoded_features, columns=encoded_col_names, index=df.index)
+        df_encoded['Image'] = df['Image']
+        df_encoded['Class'] = df['Class']
+    elif encoding == "label":
+        encoder = {}
+        for col in feature_columns:
+            le = LabelEncoder()
+            df_encoded[col] = le.fit_transform(df[col].fillna('unknown').astype(str))
+            encoder[col] = le
+    else:
+        raise ValueError(f"Invalid encoding: {encoding}. Must be 'onehot' or 'label'.")
+
+    return df_encoded, encoder
+
+
+def classify_lfg_features(
+        df: pd.DataFrame,
+        feature_columns: Optional[List[str]] = None,
+        test_size: float = 0.2,
+        random_state: int = 42,
+        model: Optional[Any] = None,
+) -> Tuple[Any, pd.DataFrame, Dict[str, Any]]:
+    """
+    Train a classifier on LFG-generated features and evaluate performance.
+
+    Args:
+        df (pd.DataFrame): DataFrame with encoded features (from encode_lfg_features or load_lfg_features).
+        feature_columns (Optional[List[str]]): Feature columns to use for classification.
+            If None, auto-detects feature columns.
+        test_size (float): Fraction of data to use for testing. Default: 0.2.
+        random_state (int): Random seed for reproducibility. Default: 42.
+        model (Optional[Any]): Sklearn classifier to use. If None, uses LogisticRegression.
+
+    Returns:
+        Tuple[Any, pd.DataFrame, Dict[str, Any]]: Tuple of (trained model, predictions DataFrame, metrics dict).
+
+    Example:
+        >>> from smer_visual.smer import load_lfg_features, encode_lfg_features, classify_lfg_features
+        >>> df = load_lfg_features("outputs/all_feature_values.csv")
+        >>> df_encoded, _ = encode_lfg_features(df, encoding="label")
+        >>> model, predictions, metrics = classify_lfg_features(df_encoded)
+        >>> print(f"Accuracy: {metrics['accuracy']:.2f}")
+    """
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
+    if feature_columns is None:
+        exclude_cols = {'Image', 'Class', 'raw_llm_output'}
+        feature_columns = [col for col in df.columns if col not in exclude_cols]
+
+    X = df[feature_columns].values
+    y = df['Class'].values
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state, stratify=y
+    )
+
+    if model is None:
+        model = LogisticRegression(max_iter=1000, random_state=random_state)
+
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    # Create predictions DataFrame
+    test_indices = df.iloc[len(y_train):].index if len(X_test) == len(df) - len(y_train) else None
+    predictions_df = pd.DataFrame({
+        'actual': y_test,
+        'predicted': y_pred,
+    })
+
+    # Calculate metrics
+    metrics = {
+        'accuracy': accuracy_score(y_test, y_pred),
+        'classification_report': classification_report(y_test, y_pred, output_dict=True),
+        'confusion_matrix': confusion_matrix(y_test, y_pred).tolist(),
+        'classes': list(model.classes_),
+    }
+
+    return model, predictions_df, metrics
+
+
+def get_lfg_feature_importance(
+        model: Any,
+        feature_names: List[str],
+        top_n: int = 10,
+) -> pd.DataFrame:
+    """
+    Extract feature importance from a trained model for LFG features.
+
+    Args:
+        model: Trained sklearn classifier with coef_ or feature_importances_ attribute.
+        feature_names (List[str]): List of feature names.
+        top_n (int): Number of top features to return. Default: 10.
+
+    Returns:
+        pd.DataFrame: DataFrame with feature names and their importance scores, sorted by importance.
+
+    Example:
+        >>> from smer_visual.smer import get_lfg_feature_importance
+        >>> importance_df = get_lfg_feature_importance(model, feature_names, top_n=10)
+        >>> print(importance_df)
+    """
+    if hasattr(model, 'coef_'):
+        # For linear models like LogisticRegression
+        if model.coef_.ndim == 1:
+            importances = np.abs(model.coef_)
+        else:
+            # Multi-class: take mean of absolute coefficients across classes
+            importances = np.mean(np.abs(model.coef_), axis=0)
+    elif hasattr(model, 'feature_importances_'):
+        # For tree-based models
+        importances = model.feature_importances_
+    else:
+        raise ValueError("Model does not have coef_ or feature_importances_ attribute.")
+
+    importance_df = pd.DataFrame({
+        'feature': feature_names,
+        'importance': importances
+    }).sort_values('importance', ascending=False)
+
+    return importance_df.head(top_n)
+
+
+def plot_lfg_feature_importance(
+        importance_df: pd.DataFrame,
+        title: str = "Top Feature Importance (LFG)",
+        figsize: Tuple[int, int] = (10, 6),
+) -> None:
+    """
+    Plot feature importance for LFG-generated features.
+
+    Args:
+        importance_df (pd.DataFrame): DataFrame from get_lfg_feature_importance().
+        title (str): Plot title. Default: "Top Feature Importance (LFG)".
+        figsize (Tuple[int, int]): Figure size. Default: (10, 6).
+
+    Returns:
+        None: Displays the plot.
+
+    Example:
+        >>> from smer_visual.smer import get_lfg_feature_importance, plot_lfg_feature_importance
+        >>> importance_df = get_lfg_feature_importance(model, feature_names)
+        >>> plot_lfg_feature_importance(importance_df)
+    """
+    plt.figure(figsize=figsize)
+    sns.barplot(
+        data=importance_df,
+        x='importance',
+        y='feature',
+        palette='viridis',
+        hue='importance'
+    )
+    plt.title(title)
+    plt.xlabel('Importance Score')
+    plt.ylabel('Feature')
+    plt.tight_layout()
+    plt.legend([], [], frameon=False)
+    plt.show()
+
+
+def lfg_pipeline(
+        data_folder: Union[str, Path],
+        discovery_samples: Union[str, Path, List[str], None] = None,
+        source_type: str = "images",
+        output_dir: Union[str, Path] = "outputs",
+        provider: Optional[Any] = None,
+        test_size: float = 0.2,
+        random_state: int = 42,
+        use_audio: bool = True,
+) -> Dict[str, Any]:
+    """
+    End-to-end pipeline for interpretable classification using LFG.
+
+    This function runs the complete workflow:
+    1. Discover features from sample images/videos
+    2. Generate feature values for all data
+    3. Train classifier and evaluate
+    4. Return model, predictions, and feature importance
+
+    Args:
+        data_folder (Union[str, Path]): Root folder with class subfolders containing images/videos.
+        discovery_samples (Union[str, Path, List[str], None]): Path to sample images/videos for
+            feature discovery. If None, uses first 5 files from data_folder.
+        source_type (str): Type of source data - "images" or "videos". Default: "images".
+        output_dir (Union[str, Path]): Directory for output files. Default: "outputs".
+        provider (Optional[Any]): LFG OpenAIProvider instance. If None, creates from env vars.
+        test_size (float): Fraction of data for testing. Default: 0.2.
+        random_state (int): Random seed. Default: 42.
+        use_audio (bool): Use audio transcription for videos. Default: True.
+
+    Returns:
+        Dict[str, Any]: Dictionary containing:
+            - 'discovered_features': The discovered feature specification
+            - 'feature_values_path': Path to generated feature values CSV
+            - 'model': Trained classifier
+            - 'predictions': Predictions DataFrame
+            - 'metrics': Classification metrics dict
+            - 'feature_importance': Feature importance DataFrame
+
+    Example:
+        >>> from smer_visual.smer import lfg_pipeline
+        >>> results = lfg_pipeline(
+        ...     data_folder="images/",
+        ...     source_type="images"
+        ... )
+        >>> print(f"Accuracy: {results['metrics']['accuracy']:.2f}")
+        >>> print(results['feature_importance'])
+    """
+    _check_lfg_available()
+
+    data_folder = Path(data_folder)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Step 1: Discover features
+    print("Step 1: Discovering features...")
+    if discovery_samples is None:
+        # Use first subfolder's first 5 files as discovery samples
+        valid_exts = {".jpg", ".jpeg", ".png"} if source_type == "images" else {".mp4", ".mov", ".avi", ".mkv"}
+        sample_files = []
+        for subfolder in data_folder.iterdir():
+            if subfolder.is_dir():
+                for f in subfolder.iterdir():
+                    if f.suffix.lower() in valid_exts:
+                        sample_files.append(str(f))
+                        if len(sample_files) >= 5:
+                            break
+            if len(sample_files) >= 5:
+                break
+        discovery_samples = sample_files
+
+    discovered_features = discover_features(
+        data_source=discovery_samples,
+        source_type=source_type,
+        provider=provider,
+        output_dir=output_dir,
+        use_audio=use_audio,
+    )
+    print(f"Discovered {len(discovered_features.get('proposed_features', []))} features")
+
+    # Step 2: Generate feature values
+    print("Step 2: Generating feature values...")
+    csv_paths = generate_features(
+        root_folder=data_folder,
+        discovered_features=discovered_features,
+        output_dir=output_dir,
+        provider=provider,
+        merge_to_single_csv=True,
+        source_type=source_type,
+        use_audio=use_audio,
+    )
+    merged_csv_path = csv_paths.get('__merged__', list(csv_paths.values())[0])
+    print(f"Feature values saved to: {merged_csv_path}")
+
+    # Step 3: Load and encode features
+    print("Step 3: Loading and encoding features...")
+    df = load_lfg_features(merged_csv_path)
+    df_encoded, encoder = encode_lfg_features(df, encoding="label")
+
+    # Get feature columns for classification
+    exclude_cols = {'Image', 'Class', 'raw_llm_output'}
+    feature_columns = [col for col in df_encoded.columns if col not in exclude_cols]
+
+    # Step 4: Train and evaluate classifier
+    print("Step 4: Training classifier...")
+    model, predictions, metrics = classify_lfg_features(
+        df_encoded,
+        feature_columns=feature_columns,
+        test_size=test_size,
+        random_state=random_state,
+    )
+    print(f"Accuracy: {metrics['accuracy']:.4f}")
+
+    # Step 5: Get feature importance
+    print("Step 5: Computing feature importance...")
+    importance_df = get_lfg_feature_importance(model, feature_columns)
+
+    return {
+        'discovered_features': discovered_features,
+        'feature_values_path': merged_csv_path,
+        'model': model,
+        'predictions': predictions,
+        'metrics': metrics,
+        'feature_importance': importance_df,
+        'encoded_data': df_encoded,
+        'encoder': encoder,
+    }
+
