@@ -23,12 +23,9 @@ from .smer import (
     plot_aopc_lfg,
     plot_important_features_lfg,
     smer_lfg_pipeline,
-    # Standalone LFG Classification (non-SMER)
-    encode_lfg_features,
-    classify_lfg_features,
-    get_lfg_feature_importance,
-    plot_lfg_feature_importance,
-    lfg_pipeline,
+    # Unified pipelines
+    smer_text_pipeline,
+    smer_pipeline,
     # LFG availability flag
     LFG_AVAILABLE,
 )
@@ -62,6 +59,9 @@ __all__ = [
     "get_lfg_feature_importance",
     "plot_lfg_feature_importance",
     "lfg_pipeline",
+    # Unified pipelines
+    "smer_text_pipeline",
+    "smer_pipeline",
     # LFG availability flag
     "LFG_AVAILABLE",
 ]

@@ -19,7 +19,34 @@ from .utils import _get_image_files_with_class, _encode_image, _preprocess_text
 
 # Import LLM Feature Gen package for interpretable feature extraction
 try:
-    import LLM_feature_gen as lfg
+    import llm_feature_gen as lfg
+    # If the package doesn't expose the functions directly, try to import them from submodules
+    # This handles the case where __init__.py is empty (e.g. some installations)
+    if not hasattr(lfg, 'discover_features_from_images'):
+        try:
+            from llm_feature_gen import discover
+            from llm_feature_gen import generate
+
+            # Monkey patch functions onto the lfg module alias
+            lfg.discover_features_from_images = discover.discover_features_from_images
+            lfg.discover_features_from_videos = discover.discover_features_from_videos
+            lfg.discover_features_from_texts = discover.discover_features_from_texts
+            lfg.discover_features_from_tabular = discover.discover_features_from_tabular
+            lfg.generate_features_from_images = generate.generate_features_from_images
+            lfg.generate_features_from_videos = generate.generate_features_from_videos
+            lfg.generate_features_from_texts = generate.generate_features_from_texts
+            lfg.generate_features_from_tabular = generate.generate_features_from_tabular
+        except ImportError:
+            pass  # If submodules fail, we can't fix it
+
+    # Ensure LocalProvider is available on the module (for older installations or incomplete __init__)
+    if not hasattr(lfg, 'LocalProvider'):
+        try:
+            from llm_feature_gen.providers.local_provider import LocalProvider
+            lfg.LocalProvider = LocalProvider
+        except ImportError:
+            pass
+
     LFG_AVAILABLE = True
 except ImportError:
     lfg = None
@@ -734,21 +761,21 @@ def _check_lfg_available():
     """Check if LLM Feature Gen package is available."""
     if not LFG_AVAILABLE:
         raise ImportError(
-            "LLM_feature_gen package is not installed. "
-            "Please install it to use this functionality: pip install LLM_feature_gen"
+            "llm_feature_gen package is not installed. "
+            "Please install it to use this functionality: pip install llm_feature_gen"
         )
 
 
 def discover_features(
         data_source: Union[str, Path, List[str]],
         source_type: str = "images",
-        prompt: Optional[str] = None,
         provider: Optional[Any] = None,
         output_dir: Union[str, Path] = "outputs",
         output_filename: Optional[str] = None,
         num_frames: int = 5,
         use_audio: bool = True,
         max_videos_to_sample: int = 5,
+        text_column: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Discover interpretable features from images or videos using LLM Feature Gen.
@@ -759,7 +786,7 @@ def discover_features(
     Args:
         data_source (Union[str, Path, List[str]]): Path to folder containing images/videos,
             or a list of file paths.
-        source_type (str): Type of source data - "images" or "videos". Default: "images".
+        source_type (str): Type of source data - "images", "videos", "texts", or "tabular". Default: "images".
         prompt (Optional[str]): Custom prompt for feature discovery. If None, uses default.
         provider (Optional[Any]): LFG OpenAIProvider instance. If None, creates one from env vars.
         output_dir (Union[str, Path]): Directory to save discovered features JSON. Default: "outputs".
@@ -767,6 +794,7 @@ def discover_features(
         num_frames (int): Number of frames to extract per video (videos only). Default: 5.
         use_audio (bool): Whether to use audio transcription (videos only). Default: True.
         max_videos_to_sample (int): Maximum videos to sample for discovery. Default: 5.
+        text_column (Optional[str]): Column name containing text data (tabular only).
 
     Returns:
         Dict[str, Any]: Dictionary containing proposed features with their descriptions.
@@ -793,7 +821,6 @@ def discover_features(
     if source_type == "images":
         return lfg.discover_features_from_images(
             image_paths_or_folder=data_source,
-            prompt=prompt,
             provider=provider,
             as_set=True,
             output_dir=output_dir,
@@ -801,8 +828,7 @@ def discover_features(
         )
     elif source_type == "videos":
         return lfg.discover_features_from_videos(
-            video_path=str(data_source),
-            prompt=prompt,
+            videos_or_folder=str(data_source),
             provider=provider,
             num_frames=num_frames,
             output_dir=output_dir,
@@ -810,15 +836,33 @@ def discover_features(
             use_audio=use_audio,
             max_videos_to_sample=max_videos_to_sample,
         )
+    elif source_type == "texts":
+        return lfg.discover_features_from_texts(
+            texts_or_file=data_source,
+            provider=provider,
+            as_set=True,
+            output_dir=output_dir,
+            output_filename=output_filename,
+        )
+    elif source_type == "tabular":
+        if text_column is None:
+            raise ValueError("text_column is required when source_type='tabular'")
+        return lfg.discover_features_from_tabular(
+            file_or_folder=data_source,
+            text_column=text_column,
+            provider=provider,
+            as_set=True,
+            output_dir=output_dir,
+            output_filename=output_filename,
+        )
     else:
-        raise ValueError(f"Invalid source_type: {source_type}. Must be 'images' or 'videos'.")
+        raise ValueError(f"Invalid source_type: {source_type}. Must be 'images', 'videos', 'texts', or 'tabular'.")
 
 
 def generate_features(
         root_folder: Union[str, Path],
         discovered_features: Optional[Dict[str, Any]] = None,
         discovered_features_path: Union[str, Path] = "outputs/discovered_features.json",
-        prompt: Optional[str] = None,
         output_dir: Union[str, Path] = "outputs",
         classes: Optional[List[str]] = None,
         provider: Optional[Any] = None,
@@ -826,6 +870,8 @@ def generate_features(
         merged_csv_name: str = "all_feature_values.csv",
         use_audio: bool = True,
         source_type: str = "images",
+        text_column: Optional[str] = None,
+        label_column: Optional[str] = None,
 ) -> Dict[str, str]:
     """
     Generate feature values for all images/videos in a folder using discovered features.
@@ -839,7 +885,6 @@ def generate_features(
             If None, loads from discovered_features_path.
         discovered_features_path (Union[str, Path]): Path to discovered features JSON file.
             Default: "outputs/discovered_features.json".
-        prompt (Optional[str]): Custom prompt for feature generation. If None, uses default.
         output_dir (Union[str, Path]): Directory to save output CSVs. Default: "outputs".
         classes (Optional[List[str]]): List of class names (subfolders) to process.
             If None, processes all subfolders.
@@ -847,7 +892,9 @@ def generate_features(
         merge_to_single_csv (bool): Whether to merge all class CSVs into one. Default: True.
         merged_csv_name (str): Name of merged CSV file. Default: "all_feature_values.csv".
         use_audio (bool): Whether to use audio transcription (videos only). Default: True.
-        source_type (str): Type of source data - "images" or "videos". Default: "images".
+        source_type (str): Type of source data - "images", "videos", "texts", or "tabular". Default: "images".
+        text_column (Optional[str]): Text column for tabular data.
+        label_column (Optional[str]): Label column for tabular data.
 
     Returns:
         Dict[str, str]: Dictionary mapping class names to their output CSV paths.
@@ -869,12 +916,47 @@ def generate_features(
     """
     _check_lfg_available()
 
+    # Clean up existing output files to prevent appending to mismatched schemas (ParserError fix)
+    try:
+        target_output_dir = Path(output_dir)
+        if target_output_dir.exists():
+            # clean merged file
+            if merge_to_single_csv:
+                merged_path = target_output_dir / merged_csv_name
+                if merged_path.exists():
+                    merged_path.unlink()
+            
+            # determine classes to clean up
+            classes_to_clean = classes
+            if classes_to_clean is None:
+                 p_root = Path(root_folder)
+                 if p_root.exists() and p_root.is_dir():
+                     classes_to_clean = [p.name for p in p_root.iterdir() if p.is_dir()]
+            
+            if classes_to_clean:
+                for cls in classes_to_clean:
+                    cls_csv = target_output_dir / f"{cls}_feature_values.csv"
+                    if cls_csv.exists():
+                        cls_csv.unlink()
+    except Exception as e:
+        print(f"Warning: Could not clean up output files: {e}")
+
+    # If discovered_features dictionary is provided, save it to the specified path
+    # because the underlying library functions expect a file path.
+    if discovered_features is not None:
+        import json
+        out_path = Path(discovered_features_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(out_path, 'w', encoding='utf-8') as f:
+                json.dump(discovered_features, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Warning: Could not save discovered features to {out_path}: {e}")
+
     if source_type == "images":
         return lfg.generate_features_from_images(
             root_folder=root_folder,
-            discovered_features=discovered_features,
             discovered_features_path=discovered_features_path,
-            prompt=prompt,
             output_dir=output_dir,
             classes=classes,
             provider=provider,
@@ -884,9 +966,7 @@ def generate_features(
     elif source_type == "videos":
         return lfg.generate_features_from_videos(
             root_folder=root_folder,
-            discovered_features=discovered_features,
             discovered_features_path=discovered_features_path,
-            prompt=prompt,
             output_dir=output_dir,
             classes=classes,
             provider=provider,
@@ -894,8 +974,32 @@ def generate_features(
             merged_csv_name=merged_csv_name,
             use_audio=use_audio,
         )
+    elif source_type == "texts":
+        return lfg.generate_features_from_texts(
+            root_folder=root_folder,
+            discovered_features_path=discovered_features_path,
+            output_dir=output_dir,
+            classes=classes,
+            provider=provider,
+            merge_to_single_csv=merge_to_single_csv,
+            merged_csv_name=merged_csv_name,
+        )
+    elif source_type == "tabular":
+        if text_column is None or label_column is None:
+            raise ValueError("text_column and label_column are required when source_type='tabular'")
+        return lfg.generate_features_from_tabular(
+            root_folder=root_folder,
+            discovered_features_path=discovered_features_path,
+            output_dir=output_dir,
+            classes=classes,
+            provider=provider,
+            merge_to_single_csv=merge_to_single_csv,
+            merged_csv_name=merged_csv_name,
+            text_column=text_column,
+            label_column=label_column,
+        )
     else:
-        raise ValueError(f"Invalid source_type: {source_type}. Must be 'images' or 'videos'.")
+        raise ValueError(f"Invalid source_type: {source_type}. Must be 'images', 'videos', 'texts', or 'tabular'.")
 
 
 def load_lfg_features(
@@ -908,7 +1012,7 @@ def load_lfg_features(
     Args:
         csv_path (Union[str, Path]): Path to the CSV file generated by generate_features().
         feature_columns (Optional[List[str]]): List of feature column names to use.
-            If None, auto-detects feature columns (excludes 'Image', 'Class', 'raw_llm_output').
+            If None, auto-detects feature columns (excludes 'Image', 'File', 'Class', 'raw_llm_output').
 
     Returns:
         pd.DataFrame: DataFrame with Image, Class, and feature columns ready for classification.
@@ -923,7 +1027,7 @@ def load_lfg_features(
 
     if feature_columns is None:
         # Auto-detect feature columns (exclude metadata columns)
-        exclude_cols = {'Image', 'Class', 'raw_llm_output'}
+        exclude_cols = {'Image', 'File', 'Class', 'raw_llm_output'}
         feature_columns = [col for col in df.columns if col not in exclude_cols]
 
     # Extract just the value part from "feature_name = value" format
@@ -967,7 +1071,7 @@ def embed_lfg_features(
     OPENAI_MODELS = {'text-embedding-ada-002', 'text-embedding-3-small', 'text-embedding-3-large'}
 
     if feature_columns is None:
-        exclude_cols = {'Image', 'Class', 'raw_llm_output'}
+        exclude_cols = {'Image', 'File', 'Class', 'raw_llm_output'}
         feature_columns = [col for col in df.columns if col not in exclude_cols]
 
     results = []
@@ -1010,17 +1114,25 @@ def embed_lfg_features(
             value = row[col]
             if pd.notna(value) and str(value).strip():
                 # Create token as "feature_name:value"
-                token = f"{col}:{value}"
-                feature_tokens.append(token)
+                # Keep original with spaces for embedding
+                token_original = f"{col}:{value}"
+                
+                # Create sanitized version for description (replace separate words with underscores)
+                # This ensures description.split() keeps the feature atomic
+                col_sanitized = str(col).replace(" ", "_")
+                val_sanitized = str(value).strip().replace(" ", "_")
+                token_sanitized = f"{col_sanitized}:{val_sanitized}"
+                
+                feature_tokens.append(token_sanitized)
 
                 try:
                     if use_openai:
-                        emb = get_openai_embedding(client, token, embedding_model)
+                        emb = get_openai_embedding(client, token_original, embedding_model)
                     else:
-                        emb = get_local_embedding(tokenizer, local_model, device, token)
+                        emb = get_local_embedding(tokenizer, local_model, device, token_original)
                     embeddings.append(emb)
                 except Exception as e:
-                    print(f"Error embedding '{token}': {e}")
+                    print(f"Error embedding '{token_original}': {e}")
                     embeddings.append(None)
 
         # Filter out None embeddings
@@ -1443,6 +1555,7 @@ def plot_important_features_lfg(dataset: pd.DataFrame) -> pd.DataFrame:
 def smer_lfg_pipeline(
         data_folder: Union[str, Path],
         embedding_model: Union[str, Path],
+        model: str = "gpt-4o-mini",
         discovery_samples: Union[str, Path, List[str], None] = None,
         api_key: Optional[str] = None,
         source_type: str = "images",
@@ -1452,6 +1565,8 @@ def smer_lfg_pipeline(
         random_state: int = 42,
         use_audio: bool = True,
         max_k: int = 6,
+        text_column: Optional[str] = None,
+        label_column: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     End-to-end SMER pipeline using LFG features for interpretable classification.
@@ -1467,6 +1582,7 @@ def smer_lfg_pipeline(
     Args:
         data_folder (Union[str, Path]): Root folder with class subfolders.
         embedding_model (Union[str, Path]): Embedding model for feature values.
+        model (str): Model for description generation (e.g. "gpt-4o-mini").
         discovery_samples (Union[str, Path, List[str], None]): Samples for feature discovery.
         api_key (Optional[str]): API key for OpenAI embeddings.
         source_type (str): "images" or "videos". Default: "images".
@@ -1476,6 +1592,8 @@ def smer_lfg_pipeline(
         random_state (int): Random seed. Default: 42.
         use_audio (bool): Use audio for videos. Default: True.
         max_k (int): Max features to remove for AOPC. Default: 6.
+        text_column (Optional[str]): Text column for tabular data.
+        label_column (Optional[str]): Label column for tabular data.
 
     Returns:
         Dict[str, Any]: Dictionary containing:
@@ -1498,6 +1616,16 @@ def smer_lfg_pipeline(
         >>> print(results['top_features'])
     """
     _check_lfg_available()
+    
+    # Initialize provider if not given but api_key is provided
+    if provider is None and api_key:
+        if hasattr(lfg, 'OpenAIProvider'):
+            provider = lfg.OpenAIProvider(api_key=api_key, default_deployment_name=model)
+        else:
+            # Fallback to direct import
+            from llm_feature_gen.providers.openai_provider import OpenAIProvider
+            provider = OpenAIProvider(api_key=api_key, default_deployment_name=model)
+
     from sklearn.model_selection import train_test_split
 
     data_folder = Path(data_folder)
@@ -1505,20 +1633,48 @@ def smer_lfg_pipeline(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Step 1: Discover features using LFG
-    print("Step 1: Discovering features with LFG...")
+    print(f"Step 1: Discovering features with LFG using model '{model}'...")
     if discovery_samples is None:
-        valid_exts = {".jpg", ".jpeg", ".png"} if source_type == "images" else {".mp4", ".mov", ".avi", ".mkv"}
-        sample_files = []
-        for subfolder in data_folder.iterdir():
-            if subfolder.is_dir():
-                for f in subfolder.iterdir():
-                    if f.suffix.lower() in valid_exts:
-                        sample_files.append(str(f))
-                        if len(sample_files) >= 5:
-                            break
-            if len(sample_files) >= 5:
-                break
-        discovery_samples = sample_files
+        if not data_folder.exists():
+            raise ValueError(f"Data folder '{data_folder.absolute()}' does not exist.")
+            
+        if source_type == "tabular":
+            # For tabular, we can pass the directory or file directly to discovery.
+            # llm-feature-gen will sample internally.
+            discovery_samples = data_folder
+        else:
+            ext_map = {
+                "images": {".jpg", ".jpeg", ".png"},
+                "videos": {".mp4", ".mov", ".avi", ".mkv"},
+                "texts": {".txt", ".md", ".json"}
+            }
+            valid_exts = ext_map.get(source_type, set())
+            sample_files = []
+
+            # Check if folder structure is valid (class subfolders)
+            subfolders = [d for d in data_folder.iterdir() if d.is_dir()]
+            if not subfolders:
+                 print(f"Warning: No subfolders found in '{data_folder}'. Expected structure: data_folder/class_name/file.ext")
+
+            for subfolder in subfolders:
+                folder_files = [f for f in subfolder.iterdir() if f.is_file() and f.suffix.lower() in valid_exts]
+                if folder_files:
+                    sample_files.extend([str(f) for f in folder_files[:5]])
+                    if len(sample_files) >= 5:
+                        break
+
+            # Safety check
+            if not sample_files:
+                # Fallback: check root folder
+                root_files = [str(f) for f in data_folder.iterdir() if f.is_file() and f.suffix.lower() in valid_exts]
+                if root_files:
+                     print(f"KeyInfo: Found {len(root_files)} files in root folder, using up to 5 for discovery.")
+                     sample_files = root_files[:5]
+                else:
+                     raise ValueError(f"No valid files found in '{data_folder}' or its subfolders with extensions {valid_exts}")
+
+            print(f"Using {len(sample_files)} sample files for feature discovery: {sample_files}")
+            discovery_samples = sample_files
 
     discovered_features = discover_features(
         data_source=discovery_samples,
@@ -1526,8 +1682,24 @@ def smer_lfg_pipeline(
         provider=provider,
         output_dir=output_dir,
         use_audio=use_audio,
+        text_column=text_column,
     )
-    print(f"Discovered {len(discovered_features.get('proposed_features', []))} features")
+    
+    num_features = len(discovered_features.get('proposed_features', []))
+    print(f"Discovered {num_features} features")
+    
+    if num_features == 0:
+        print("Warning: 0 features were discovered. This usually indicates an issue with the LLM provider or the model.")
+        print(f"{discovered_features = }")
+
+        # Attempt to see if there was an error message in the return dict (if lfg adds it)
+        if 'error' in discovered_features:
+             print(f"Provider Error: {discovered_features['error']}")
+        elif 'features' in discovered_features and isinstance(discovered_features['features'], str):
+             # This happens when the provider returns text that couldn't be parsed as JSON
+             print(f"Provider raw (fallback) response: {discovered_features['features']}")
+        elif not discovered_features:
+             print("Provider returned completely empty result.")
 
     # Step 2: Generate feature values
     print("Step 2: Generating feature values with LFG...")
@@ -1539,6 +1711,8 @@ def smer_lfg_pipeline(
         merge_to_single_csv=True,
         source_type=source_type,
         use_audio=use_audio,
+        text_column=text_column,
+        label_column=label_column,
     )
     merged_csv_path = csv_paths.get('__merged__', list(csv_paths.values())[0])
     print(f"Feature values saved to: {merged_csv_path}")
@@ -1589,325 +1763,160 @@ def smer_lfg_pipeline(
     }
 
 
-def encode_lfg_features(
-        df: pd.DataFrame,
-        feature_columns: Optional[List[str]] = None,
-        encoding: str = "onehot",
-) -> Tuple[pd.DataFrame, Any]:
-    """
-    Encode LFG categorical features for use with classifiers.
-
-    Args:
-        df (pd.DataFrame): DataFrame from load_lfg_features().
-        feature_columns (Optional[List[str]]): Feature columns to encode.
-            If None, auto-detects feature columns.
-        encoding (str): Encoding method - "onehot" or "label". Default: "onehot".
-
-    Returns:
-        Tuple[pd.DataFrame, Any]: Tuple of (encoded DataFrame, encoder object).
-
-    Example:
-        >>> from smer_visual.smer import load_lfg_features, encode_lfg_features
-        >>> df = load_lfg_features("outputs/all_feature_values.csv")
-        >>> df_encoded, encoder = encode_lfg_features(df, encoding="onehot")
-    """
-    from sklearn.preprocessing import LabelEncoder, OneHotEncoder
-
-    if feature_columns is None:
-        exclude_cols = {'Image', 'Class', 'raw_llm_output'}
-        feature_columns = [col for col in df.columns if col not in exclude_cols]
-
-    df_encoded = df.copy()
-
-    if encoding == "onehot":
-        encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
-        encoded_features = encoder.fit_transform(df[feature_columns].fillna('unknown'))
-        encoded_col_names = encoder.get_feature_names_out(feature_columns)
-        df_encoded = pd.DataFrame(encoded_features, columns=encoded_col_names, index=df.index)
-        df_encoded['Image'] = df['Image']
-        df_encoded['Class'] = df['Class']
-    elif encoding == "label":
-        encoder = {}
-        for col in feature_columns:
-            le = LabelEncoder()
-            df_encoded[col] = le.fit_transform(df[col].fillna('unknown').astype(str))
-            encoder[col] = le
-    else:
-        raise ValueError(f"Invalid encoding: {encoding}. Must be 'onehot' or 'label'.")
-
-    return df_encoded, encoder
-
-
-def classify_lfg_features(
-        df: pd.DataFrame,
-        feature_columns: Optional[List[str]] = None,
-        test_size: float = 0.2,
-        random_state: int = 42,
-        model: Optional[Any] = None,
-) -> Tuple[Any, pd.DataFrame, Dict[str, Any]]:
-    """
-    Train a classifier on LFG-generated features and evaluate performance.
-
-    Args:
-        df (pd.DataFrame): DataFrame with encoded features (from encode_lfg_features or load_lfg_features).
-        feature_columns (Optional[List[str]]): Feature columns to use for classification.
-            If None, auto-detects feature columns.
-        test_size (float): Fraction of data to use for testing. Default: 0.2.
-        random_state (int): Random seed for reproducibility. Default: 42.
-        model (Optional[Any]): Sklearn classifier to use. If None, uses LogisticRegression.
-
-    Returns:
-        Tuple[Any, pd.DataFrame, Dict[str, Any]]: Tuple of (trained model, predictions DataFrame, metrics dict).
-
-    Example:
-        >>> from smer_visual.smer import load_lfg_features, encode_lfg_features, classify_lfg_features
-        >>> df = load_lfg_features("outputs/all_feature_values.csv")
-        >>> df_encoded, _ = encode_lfg_features(df, encoding="label")
-        >>> model, predictions, metrics = classify_lfg_features(df_encoded)
-        >>> print(f"Accuracy: {metrics['accuracy']:.2f}")
-    """
-    from sklearn.model_selection import train_test_split
-    from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-
-    if feature_columns is None:
-        exclude_cols = {'Image', 'Class', 'raw_llm_output'}
-        feature_columns = [col for col in df.columns if col not in exclude_cols]
-
-    X = df[feature_columns].values
-    y = df['Class'].values
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state, stratify=y
-    )
-
-    if model is None:
-        model = LogisticRegression(max_iter=1000, random_state=random_state)
-
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-
-    # Create predictions DataFrame
-    test_indices = df.iloc[len(y_train):].index if len(X_test) == len(df) - len(y_train) else None
-    predictions_df = pd.DataFrame({
-        'actual': y_test,
-        'predicted': y_pred,
-    })
-
-    # Calculate metrics
-    metrics = {
-        'accuracy': accuracy_score(y_test, y_pred),
-        'classification_report': classification_report(y_test, y_pred, output_dict=True),
-        'confusion_matrix': confusion_matrix(y_test, y_pred).tolist(),
-        'classes': list(model.classes_),
-    }
-
-    return model, predictions_df, metrics
-
-
-def get_lfg_feature_importance(
-        model: Any,
-        feature_names: List[str],
-        top_n: int = 10,
-) -> pd.DataFrame:
-    """
-    Extract feature importance from a trained model for LFG features.
-
-    Args:
-        model: Trained sklearn classifier with coef_ or feature_importances_ attribute.
-        feature_names (List[str]): List of feature names.
-        top_n (int): Number of top features to return. Default: 10.
-
-    Returns:
-        pd.DataFrame: DataFrame with feature names and their importance scores, sorted by importance.
-
-    Example:
-        >>> from smer_visual.smer import get_lfg_feature_importance
-        >>> importance_df = get_lfg_feature_importance(model, feature_names, top_n=10)
-        >>> print(importance_df)
-    """
-    if hasattr(model, 'coef_'):
-        # For linear models like LogisticRegression
-        if model.coef_.ndim == 1:
-            importances = np.abs(model.coef_)
-        else:
-            # Multi-class: take mean of absolute coefficients across classes
-            importances = np.mean(np.abs(model.coef_), axis=0)
-    elif hasattr(model, 'feature_importances_'):
-        # For tree-based models
-        importances = model.feature_importances_
-    else:
-        raise ValueError("Model does not have coef_ or feature_importances_ attribute.")
-
-    importance_df = pd.DataFrame({
-        'feature': feature_names,
-        'importance': importances
-    }).sort_values('importance', ascending=False)
-
-    return importance_df.head(top_n)
-
-
-def plot_lfg_feature_importance(
-        importance_df: pd.DataFrame,
-        title: str = "Top Feature Importance (LFG)",
-        figsize: Tuple[int, int] = (10, 6),
-) -> None:
-    """
-    Plot feature importance for LFG-generated features.
-
-    Args:
-        importance_df (pd.DataFrame): DataFrame from get_lfg_feature_importance().
-        title (str): Plot title. Default: "Top Feature Importance (LFG)".
-        figsize (Tuple[int, int]): Figure size. Default: (10, 6).
-
-    Returns:
-        None: Displays the plot.
-
-    Example:
-        >>> from smer_visual.smer import get_lfg_feature_importance, plot_lfg_feature_importance
-        >>> importance_df = get_lfg_feature_importance(model, feature_names)
-        >>> plot_lfg_feature_importance(importance_df)
-    """
-    plt.figure(figsize=figsize)
-    sns.barplot(
-        data=importance_df,
-        x='importance',
-        y='feature',
-        palette='viridis',
-        hue='importance'
-    )
-    plt.title(title)
-    plt.xlabel('Importance Score')
-    plt.ylabel('Feature')
-    plt.tight_layout()
-    plt.legend([], [], frameon=False)
-    plt.show()
-
-
-def lfg_pipeline(
-        data_folder: Union[str, Path],
-        discovery_samples: Union[str, Path, List[str], None] = None,
-        source_type: str = "images",
-        output_dir: Union[str, Path] = "outputs",
-        provider: Optional[Any] = None,
-        test_size: float = 0.2,
-        random_state: int = 42,
-        use_audio: bool = True,
+def smer_text_pipeline(
+    data_folder: Union[str, Path],
+    model: str = "gpt-4o-mini",
+    embedding_model: Union[str, Path] = "text-embedding-ada-002",
+    api_key: Optional[str] = None,
+    user_prompt: str = "Describe this image in 7 words. Be concise, try to maximize the information about the objects in this image.",
+    output_dir: Union[str, Path] = "outputs",
+    test_size: float = 0.2,
+    random_state: int = 42,
+    max_k: int = 6,
 ) -> Dict[str, Any]:
     """
-    End-to-end pipeline for interpretable classification using LFG.
+    End-to-end SMER pipeline using text descriptions.
 
-    This function runs the complete workflow:
-    1. Discover features from sample images/videos
-    2. Generate feature values for all data
-    3. Train classifier and evaluate
-    4. Return model, predictions, and feature importance
+    This pipeline runs the standard SMER workflow:
+    1. Generate text descriptions for images
+    2. Embed descriptions
+    3. Train classifier
+    4. Compute SMER word importance (AOPC)
+    5. Generate plots
 
     Args:
-        data_folder (Union[str, Path]): Root folder with class subfolders containing images/videos.
-        discovery_samples (Union[str, Path, List[str], None]): Path to sample images/videos for
-            feature discovery. If None, uses first 5 files from data_folder.
-        source_type (str): Type of source data - "images" or "videos". Default: "images".
-        output_dir (Union[str, Path]): Directory for output files. Default: "outputs".
-        provider (Optional[Any]): LFG OpenAIProvider instance. If None, creates from env vars.
-        test_size (float): Fraction of data for testing. Default: 0.2.
-        random_state (int): Random seed. Default: 42.
-        use_audio (bool): Use audio transcription for videos. Default: True.
+        data_folder (Union[str, Path]): Root folder with class subfolders.
+        model (str): Model for description generation (e.g. "gpt-4o-mini").
+        embedding_model (Union[str, Path]): Model for embeddings.
+        api_key (Optional[str]): OpenAI API key.
+        user_prompt (str): Prompt for description generation.
+        output_dir (Union[str, Path]): Output directory.
+        test_size (float): Test set fraction.
+        random_state (int): Random seed.
+        max_k (int): Max words to remove for AOPC.
 
     Returns:
-        Dict[str, Any]: Dictionary containing:
-            - 'discovered_features': The discovered feature specification
-            - 'feature_values_path': Path to generated feature values CSV
-            - 'model': Trained classifier
-            - 'predictions': Predictions DataFrame
-            - 'metrics': Classification metrics dict
-            - 'feature_importance': Feature importance DataFrame
-
-    Example:
-        >>> from smer_visual.smer import lfg_pipeline
-        >>> results = lfg_pipeline(
-        ...     data_folder="images/",
-        ...     source_type="images"
-        ... )
-        >>> print(f"Accuracy: {results['metrics']['accuracy']:.2f}")
-        >>> print(results['feature_importance'])
+        Dict[str, Any]: Dictionary containing results.
     """
-    _check_lfg_available()
+    from sklearn.model_selection import train_test_split
 
     data_folder = Path(data_folder)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Step 1: Discover features
-    print("Step 1: Discovering features...")
-    if discovery_samples is None:
-        # Use first subfolder's first 5 files as discovery samples
-        valid_exts = {".jpg", ".jpeg", ".png"} if source_type == "images" else {".mp4", ".mov", ".avi", ".mkv"}
-        sample_files = []
-        for subfolder in data_folder.iterdir():
-            if subfolder.is_dir():
-                for f in subfolder.iterdir():
-                    if f.suffix.lower() in valid_exts:
-                        sample_files.append(str(f))
-                        if len(sample_files) >= 5:
-                            break
-            if len(sample_files) >= 5:
-                break
-        discovery_samples = sample_files
-
-    discovered_features = discover_features(
-        data_source=discovery_samples,
-        source_type=source_type,
-        provider=provider,
-        output_dir=output_dir,
-        use_audio=use_audio,
+    # Step 1: Generate Descriptions
+    print("Step 1: Generating image descriptions...")
+    descriptions = image_descriptions(
+        model=model,
+        data_folder=data_folder,
+        api_key=api_key,
+        user_prompt=user_prompt
     )
-    print(f"Discovered {len(discovered_features.get('proposed_features', []))} features")
 
-    # Step 2: Generate feature values
-    print("Step 2: Generating feature values...")
-    csv_paths = generate_features(
-        root_folder=data_folder,
-        discovered_features=discovered_features,
-        output_dir=output_dir,
-        provider=provider,
-        merge_to_single_csv=True,
-        source_type=source_type,
-        use_audio=use_audio,
+    # Step 2: Embed Descriptions
+    print("Step 2: Embedding descriptions...")
+    df_embedded = embed_descriptions(
+        descriptions=descriptions,
+        embedding_model=embedding_model,
+        api_key=api_key
     )
-    merged_csv_path = csv_paths.get('__merged__', list(csv_paths.values())[0])
-    print(f"Feature values saved to: {merged_csv_path}")
+    print(f"Embedded {len(df_embedded)} samples")
 
-    # Step 3: Load and encode features
-    print("Step 3: Loading and encoding features...")
-    df = load_lfg_features(merged_csv_path)
-    df_encoded, encoder = encode_lfg_features(df, encoding="label")
+    # Step 3: Train Classifier
+    print("Step 3: Training classifier...")
+    # Filter valid
+    valid_mask = df_embedded['embedding'].apply(lambda x: x is not None and len(x) > 0)
+    df_valid = df_embedded[valid_mask].reset_index(drop=True)
 
-    # Get feature columns for classification
-    exclude_cols = {'Image', 'Class', 'raw_llm_output'}
-    feature_columns = [col for col in df_encoded.columns if col not in exclude_cols]
+    X = np.vstack([aggregate_embeddings(e) for e in df_valid['embedding']])
+    y = df_valid['label'].values
 
-    # Step 4: Train and evaluate classifier
-    print("Step 4: Training classifier...")
-    model, predictions, metrics = classify_lfg_features(
-        df_encoded,
-        feature_columns=feature_columns,
-        test_size=test_size,
-        random_state=random_state,
+    X_train, X_test, y_train, y_test, train_idx, test_idx = train_test_split(
+        X, y, range(len(X)), test_size=test_size, random_state=random_state, stratify=y
     )
-    print(f"Accuracy: {metrics['accuracy']:.4f}")
 
-    # Step 5: Get feature importance
-    print("Step 5: Computing feature importance...")
-    importance_df = get_lfg_feature_importance(model, feature_columns)
+    logreg_model = LogisticRegression(max_iter=1000, random_state=random_state)
+    logreg_model.fit(X_train, y_train)
+
+    accuracy = logreg_model.score(X_test, y_test)
+    print(f"Classifier accuracy: {accuracy:.4f}")
+
+    # Step 4: SMER Analysis
+    print("Step 4: Computing SMER word importance...")
+    df_aopc, dataset = classify_lr(df_valid, X_train, logreg_model)
+
+    # Step 5: Plot Results
+    print("Step 5: Generating plots...")
+    plot_aopc(df_aopc, logreg_model, max_k=max_k)
+    top_words = plot_important_words(dataset)
 
     return {
-        'discovered_features': discovered_features,
-        'feature_values_path': merged_csv_path,
-        'model': model,
-        'predictions': predictions,
-        'metrics': metrics,
-        'feature_importance': importance_df,
-        'encoded_data': df_encoded,
-        'encoder': encoder,
+        'descriptions': descriptions,
+        'embedded_data': df_embedded,
+        'model': logreg_model,
+        'df_aopc': df_aopc,
+        'dataset': dataset,
+        'top_words': top_words,
+        'accuracy': accuracy,
     }
 
+def smer_pipeline(
+    data_folder: Union[str, Path],
+    mode: str = "text",
+    # Text mode args
+    model: str = "gpt-4o-mini",
+    user_prompt: str = "Describe this image in 7 words. Be concise.",
+    # LLM features mode args
+    discovery_samples: Union[str, Path, List[str], None] = None,
+    provider: Optional[Any] = None,
+    source_type: str = "images",
+    # Common args
+    embedding_model: Union[str, Path] = "text-embedding-ada-002",
+    api_key: Optional[str] = None,
+    output_dir: Union[str, Path] = "outputs",
+    test_size: float = 0.2,
+    random_state: int = 42,
+    use_audio: bool = True,
+    max_k: int = 6,
+    text_column: Optional[str] = None,
+    label_column: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Unified SMER pipeline supporting both text descriptions and LLM-generated features.
+
+    Args:
+        mode (str): "text" for standard description-based SMER,
+                    "llm_features" for LFG-based SMER.
+        ... (other args passed to respective pipelines) ...
+    """
+    if mode == "text":
+        return smer_text_pipeline(
+            data_folder=data_folder,
+            model=model,
+            embedding_model=embedding_model,
+            api_key=api_key,
+            user_prompt=user_prompt,
+            output_dir=output_dir,
+            test_size=test_size,
+            random_state=random_state,
+            max_k=max_k,
+        )
+    elif mode == "llm_features":
+        return smer_lfg_pipeline(
+            data_folder=data_folder,
+            embedding_model=embedding_model,
+            model=model,
+            discovery_samples=discovery_samples,
+            api_key=api_key,
+            source_type=source_type,
+            output_dir=output_dir,
+            provider=provider,
+            test_size=test_size,
+            random_state=random_state,
+            use_audio=use_audio,
+            max_k=max_k,
+            text_column=text_column,
+            label_column=label_column,
+        )
+    else:
+        raise ValueError(f"Invalid mode: {mode}. Must be 'text' or 'llm_features'.")
