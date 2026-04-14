@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   test:
     strategy:
@@ -32,4 +36,16 @@ jobs:
         run: python -m pip install -e . --no-deps
 
       - name: Run tests with coverage gate
-        run: python -m pytest --cov --cov-report=term-missing
+        run: python -m pytest --cov --cov-report=term-missing --cov-report=xml:coverage.xml
+
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v5
+        with:
+          use_oidc: true
+          files: ./coverage.xml
+          disable_search: true
+          flags: unittests
+          name: ubuntu-py311
+          fail_ci_if_error: true
+          verbose: true

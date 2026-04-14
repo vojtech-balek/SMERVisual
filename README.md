@@ -1,5 +1,7 @@
 # **SMERVisual**
 
+[![codecov](https://codecov.io/github/vojtech-balek/SMERVisual/graph/badge.svg)](https://app.codecov.io/github/vojtech-balek/SMERVisual)
+
 SMERVisual is a Python package designed for explainable machine learning using the **Self Model Entities Related (SMER) method**. It provides tools for explainable classification of images with **LLM-generated text descriptions**, which are then analyzed using the SMER explanation technique.
 
 The package supports both **OpenAI API** models and **local language models**, offering flexibility in model selection.
