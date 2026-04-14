@@ -35,3 +35,14 @@ dependencies = [
 [project.urls]
 "Homepage" = "https://github.com/vojtech-balek/SMERVisual"
 "Bug Tracker" = "https://github.com/vojtech-balek/SMERVisual/issues"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["smer_visual"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true

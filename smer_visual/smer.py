@@ -716,3 +716,4 @@ def save_bounding_box_images(
             results[str(img_path)] = None
 
     print(f"Completed! Processed {len(results)} images.")
+    return results
