@@ -2,9 +2,10 @@ name: Docs
 
 on:
   pull_request:
-  push:
+  workflow_run:
+    workflows: ["Tests"]
+    types: [completed]
     branches: ["main"]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,11 +18,14 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -38,15 +42,17 @@ jobs:
         run: python -m mkdocs build --strict
 
       - name: Set up Pages
+        if: github.event_name == 'workflow_run'
         uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
+        if: github.event_name == 'workflow_run'
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./site
 
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
