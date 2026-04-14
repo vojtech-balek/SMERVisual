@@ -19,7 +19,11 @@ def _install_dependency_stubs():
     def no_grad():
         yield
 
+    class _Tensor:
+        pass
+
     torch.no_grad = no_grad
+    torch.Tensor = _Tensor
     torch.bfloat16 = "bfloat16"
     torch.device = lambda name: name
     torch.cuda = types.SimpleNamespace(
