@@ -1,0 +1,16 @@
+site_name: SMERVisual
+site_description: Documentation for the SMERVisual Python package.
+site_url: https://vojtech-balek.github.io/SMERVisual/
+repo_url: https://github.com/vojtech-balek/SMERVisual
+repo_name: vojtech-balek/SMERVisual
+theme:
+  name: readthedocs
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - API Reference: api.md
+markdown_extensions:
+  - toc:
+      permalink: true
+  - tables
+  - admonition

@@ -761,6 +761,8 @@ def save_bounding_box_images(
 
     print(f"Completed! Processed {len(results)} images.")
 
+    return results
+
 
 # =============================================================================
 # LLM Feature Gen (lfg) Integration
@@ -934,14 +936,14 @@ def generate_features(
                 merged_path = target_output_dir / merged_csv_name
                 if merged_path.exists():
                     merged_path.unlink()
-            
+
             # determine classes to clean up
             classes_to_clean = classes
             if classes_to_clean is None:
                  p_root = Path(root_folder)
                  if p_root.exists() and p_root.is_dir():
                      classes_to_clean = [p.name for p in p_root.iterdir() if p.is_dir()]
-            
+
             if classes_to_clean:
                 for cls in classes_to_clean:
                     cls_csv = target_output_dir / f"{cls}_feature_values.csv"
@@ -1125,13 +1127,13 @@ def embed_lfg_features(
                 # Create token as "feature_name:value"
                 # Keep original with spaces for embedding
                 token_original = f"{col}:{value}"
-                
+
                 # Create sanitized version for description (replace separate words with underscores)
                 # This ensures description.split() keeps the feature atomic
                 col_sanitized = str(col).replace(" ", "_")
                 val_sanitized = str(value).strip().replace(" ", "_")
                 token_sanitized = f"{col_sanitized}:{val_sanitized}"
-                
+
                 feature_tokens.append(token_sanitized)
 
                 try:
@@ -1629,7 +1631,7 @@ def smer_lfg_pipeline(
         >>> print(results['top_features'])
     """
     _check_lfg_available()
-    
+
     # Initialize provider if not given but api_key is provided
     if provider is None and api_key:
         if hasattr(lfg, 'OpenAIProvider'):
@@ -1650,7 +1652,7 @@ def smer_lfg_pipeline(
     if discovery_samples is None:
         if not data_folder.exists():
             raise ValueError(f"Data folder '{data_folder.absolute()}' does not exist.")
-            
+
         if source_type == "tabular":
             # For tabular, we can pass the directory or file directly to discovery.
             # llm-feature-gen will sample internally.
@@ -1697,10 +1699,10 @@ def smer_lfg_pipeline(
         use_audio=use_audio,
         text_column=text_column,
     )
-    
+
     num_features = len(discovered_features.get('proposed_features', []))
     print(f"Discovered {num_features} features")
-    
+
     if num_features == 0:
         print("Warning: 0 features were discovered. This usually indicates an issue with the LLM provider or the model.")
         print(f"{discovered_features = }")
