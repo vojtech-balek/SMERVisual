@@ -47,7 +47,13 @@ try:
         except ImportError:
             pass
 
-    LFG_AVAILABLE = True
+    # Validate that the required API surface is present
+    required_attrs = ['discover_features_from_images', 'generate_features_from_images']
+    if all(hasattr(lfg, attr) for attr in required_attrs):
+        LFG_AVAILABLE = True
+    else:
+        LFG_AVAILABLE = False
+
 except ImportError:
     lfg = None
     LFG_AVAILABLE = False
@@ -337,7 +343,7 @@ def _predict_proba_for_text(text, row, logreg_model):
     return probs
 
 def classify_lr(dataset: pd.DataFrame, X_train,
-                logreg_model: LogisticRegression) -> (pd.DataFrame, pd.DataFrame):
+                logreg_model: LogisticRegression, test_idx=None) -> (pd.DataFrame, pd.DataFrame):
     """
         Use logistic regression to classify the instances and get feature weights.
 
@@ -420,7 +426,10 @@ def classify_lr(dataset: pd.DataFrame, X_train,
     dataset['sorted_words_by_importance_processed'] = dataset['sorted_words_by_importance'].apply(
         _preprocess_text)
 
-    df_aopc = dataset[X_train.shape[0] + 1:].reset_index(drop=True)
+    if test_idx is not None:
+        df_aopc = dataset.iloc[test_idx].reset_index(drop=True)
+    else:
+        df_aopc = dataset[X_train.shape[0]:].reset_index(drop=True)
     return df_aopc, dataset
 
 
@@ -762,7 +771,7 @@ def _check_lfg_available():
     if not LFG_AVAILABLE:
         raise ImportError(
             "llm_feature_gen package is not installed. "
-            "Please install it to use this functionality: pip install llm_feature_gen"
+            "Please install it to use this functionality: pip install llm-feature-gen"
         )
 
 
@@ -787,7 +796,6 @@ def discover_features(
         data_source (Union[str, Path, List[str]]): Path to folder containing images/videos,
             or a list of file paths.
         source_type (str): Type of source data - "images", "videos", "texts", or "tabular". Default: "images".
-        prompt (Optional[str]): Custom prompt for feature discovery. If None, uses default.
         provider (Optional[Any]): LFG OpenAIProvider instance. If None, creates one from env vars.
         output_dir (Union[str, Path]): Directory to save discovered features JSON. Default: "outputs".
         output_filename (Optional[str]): Custom output filename. Default: "discovered_features.json".
@@ -827,8 +835,9 @@ def discover_features(
             output_filename=output_filename,
         )
     elif source_type == "videos":
+        videos_input = data_source if isinstance(data_source, list) else str(data_source)
         return lfg.discover_features_from_videos(
-            videos_or_folder=str(data_source),
+            videos_or_folder=videos_input,
             provider=provider,
             num_frames=num_frames,
             output_dir=output_dir,
@@ -1208,6 +1217,7 @@ def classify_lr_lfg(
         dataset: pd.DataFrame,
         X_train: np.ndarray,
         logreg_model: LogisticRegression,
+        test_idx=None
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Apply SMER classification method to LFG-embedded features.
@@ -1282,7 +1292,10 @@ def classify_lr_lfg(
         dataset.at[idx, 'sorted_features_by_importance'] = ','.join(sorted_features_list)
 
     # Create AOPC dataset (test set portion)
-    df_aopc = dataset[X_train.shape[0] + 1:].reset_index(drop=True)
+    if test_idx is not None:
+        df_aopc = dataset.iloc[test_idx].reset_index(drop=True)
+    else:
+        df_aopc = dataset[X_train.shape[0]:].reset_index(drop=True)
     return df_aopc, dataset
 
 
@@ -1744,7 +1757,7 @@ def smer_lfg_pipeline(
 
     # Step 5: SMER analysis
     print("Step 5: Computing SMER feature importance...")
-    df_aopc, dataset = classify_lr_lfg(df_valid, X_train, logreg_model)
+    df_aopc, dataset = classify_lr_lfg(df_valid, X_train, logreg_model, test_idx=test_idx)
 
     # Step 6: Plot results
     print("Step 6: Generating plots...")
@@ -1843,7 +1856,7 @@ def smer_text_pipeline(
 
     # Step 4: SMER Analysis
     print("Step 4: Computing SMER word importance...")
-    df_aopc, dataset = classify_lr(df_valid, X_train, logreg_model)
+    df_aopc, dataset = classify_lr(df_valid, X_train, logreg_model, test_idx=test_idx)
 
     # Step 5: Plot Results
     print("Step 5: Generating plots...")
