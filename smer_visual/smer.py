@@ -761,6 +761,8 @@ def save_bounding_box_images(
 
     print(f"Completed! Processed {len(results)} images.")
 
+    return results
+
 
 # =============================================================================
 # LLM Feature Gen (lfg) Integration
